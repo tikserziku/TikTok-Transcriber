@@ -18,9 +18,6 @@ COPY app.py .
 # Установка Python зависимостей
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Проверка установки ffmpeg
-RUN ffmpeg -version
-
 # Переменные окружения
 ENV PORT=8080
 
