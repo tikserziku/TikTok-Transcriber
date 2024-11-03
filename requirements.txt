@@ -1,9 +1,9 @@
+fastapi==0.95.0
+uvicorn==0.21.1
 google-generativeai==0.8.3
-gradio==3.35.2
-yt-dlp==2023.12.30
+yt-dlp==2023.10.13
 moviepy==1.0.3
 pydub==0.25.1
 python-dotenv==1.0.0
 langdetect==1.0.9
-websockets>=12.0
-ffmpeg-python==0.2.0
+python-multipart==0.0.6
