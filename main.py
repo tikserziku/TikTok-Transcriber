@@ -46,42 +46,42 @@ async def read_root(request: Request):
         logger.error(f"Error rendering index page: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-async def process_in_thread(processor: TikTokProcessor, url: str, target_language: str):
-    """Выполнение обработки в отдельном потоке"""
-    try:
-        return await asyncio.get_event_loop().run_in_executor(
-            thread_pool,
-            processor.process_video,
-            url,
-            target_language
-        )
-    except Exception as e:
-        logger.error(f"Thread processing error: {str(e)}")
-        raise
-
 @app.post("/process")
 async def process_video(request: VideoRequest):
     processor = TikTokProcessor()
+    
+    async def run_processing():
+        try:
+            return await asyncio.get_event_loop().run_in_executor(
+                thread_pool,
+                processor.process_video,
+                request.url,
+                request.target_language
+            )
+        except Exception as e:
+            logger.error(f"Processing error in thread: {str(e)}")
+            raise
+
     try:
         # Проверка языка
         valid_languages = ['en', 'ru', 'lt']
         if request.target_language not in valid_languages:
             raise ValueError("Неподдерживаемый язык")
 
-        # Обработка в отдельном потоке с таймаутом
+        # Обработка с таймаутом
         try:
             transcript, summary = await asyncio.wait_for(
-                process_in_thread(processor, request.url, request.target_language),
+                run_processing(),
                 timeout=300
             )
         except asyncio.TimeoutError:
             raise HTTPException(status_code=408, detail="Превышено время ожидания запроса")
-        
+
         return {
             "transcription": transcript,
             "summary": summary
         }
-        
+
     except ValueError as ve:
         logger.warning(f"Validation error: {str(ve)}")
         raise HTTPException(status_code=400, detail=str(ve))
@@ -102,14 +102,9 @@ async def process_video(request: VideoRequest):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    
     uvicorn.run(
-        "main:app",
+        app,
         host="0.0.0.0",
         port=port,
-        workers=2,
-        loop="asyncio",
-        timeout_keep_alive=120,
-        access_log=True,
         log_level="info"
     )
