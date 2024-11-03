@@ -1,11 +1,11 @@
-# Dockerfile
 FROM python:3.10-slim
 
 # Установка системных зависимостей
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     git \
-    wget \
+    build-essential \
+    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Создание рабочей директории
