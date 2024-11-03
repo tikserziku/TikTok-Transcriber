@@ -91,3 +91,41 @@ function updateProgress(progressBar, percent) {
         progressBar.innerText = `${percent}%`;
     }
 }
+function copyText(elementId) {
+    const element = document.getElementById(elementId); // Get the parent element (transcription or summary)
+
+    if (!element) {
+        console.error(`Element with id "${elementId}" not found.`);
+        return; // Or show an error message to the user.
+    }
+
+    const contentElement = element.querySelector('.content');
+
+     if (!contentElement) {
+        console.error(`Content element within "${elementId}" not found.`);
+        return;
+    }
+
+    const textToCopy = contentElement.innerText;
+
+    navigator.clipboard.writeText(textToCopy)
+        .then(() => {
+            // Show a temporary "Copied!" message
+            const btn = element.querySelector('.copy-btn');
+            if (btn) {
+                const originalText = btn.innerText;
+                btn.innerText = 'Copied!';
+                setTimeout(() => {
+                    btn.innerText = originalText;
+                }, 2000); // Change back after 2 seconds
+            }
+
+
+        })
+        .catch(err => {
+            console.error('Failed to copy: ', err);
+            // Optionally show an error message to the user
+            alert("Could not copy text. Please try manually selecting and copying.");
+
+        });
+}
