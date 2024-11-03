@@ -8,7 +8,6 @@ import logging
 import os
 from processor import TikTokProcessor
 from concurrent.futures import ThreadPoolExecutor
-import shutil  # Import shutil
 
 # Настройка логирования
 logging.basicConfig(
@@ -48,7 +47,7 @@ async def read_root(request: Request):
     try:
         return templates.TemplateResponse("index.html", {"request": request})
     except Exception as e:
-        logger.error(f"Error rendering index page: {str(e)}")
+        logger.error(f"Error rendering index page: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 
@@ -65,7 +64,7 @@ async def process_video(video_request: VideoRequest):
             )
             return result
         except Exception as e:
-            logger.error(f"Processing error in thread: {str(e)}")
+            logger.error(f"Processing error in thread: {e}")
             raise
 
     try:
@@ -91,12 +90,10 @@ async def process_video(video_request: VideoRequest):
     except HTTPException:
         raise  # Re-raise HTTPExceptions
     except Exception as e:
-        logger.error(f"Processing error: {str(e)}")
+        logger.error(f"Processing error: {e}")
         raise HTTPException(status_code=500, detail="Video processing failed")
     finally:
-        # Ensure cleanup happens. No async needed for shutil.rmtree
-        if hasattr(processor, 'temp_dir') and os.path.exists(processor.temp_dir):
-            shutil.rmtree(processor.temp_dir)
+        processor.cleanup()
 
 
 if __name__ == "__main__":
