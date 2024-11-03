@@ -1,11 +1,3 @@
-function updateProgress(downloadProgress, processProgress) {
-    document.getElementById('download-progress').style.width = downloadProgress + '%';
-    document.getElementById('download-progress').innerText = downloadProgress + '%';
-    
-    document.getElementById('process-progress').style.width = processProgress + '%';
-    document.getElementById('process-progress').innerText = processProgress + '%';
-}
-
 async function processVideo() {
     const url = document.getElementById('tiktokUrl').value;
     const lang = document.getElementById('language').value;
@@ -15,9 +7,11 @@ async function processVideo() {
         return;
     }
 
+    // Показываем прогресс
     document.getElementById('progress-container').style.display = 'block';
     updateProgress(0, 0);
     
+    // Очищаем предыдущие результаты
     document.getElementById('transcription').querySelector('.content').innerText = 'Processing...';
     document.getElementById('summary').querySelector('.content').innerText = 'Processing...';
     
@@ -26,10 +20,10 @@ async function processVideo() {
         let processProgress = 0;
         const progressInterval = setInterval(() => {
             if (downloadProgress < 90) {
-                downloadProgress += 10;
+                downloadProgress += 5;
                 updateProgress(downloadProgress, processProgress);
             }
-        }, 500);
+        }, 1000);
 
         const response = await fetch('/process', {
             method: 'POST',
@@ -39,50 +33,43 @@ async function processVideo() {
             body: JSON.stringify({
                 url: url,
                 target_language: lang
-            })
+            }),
+            timeout: 120000  // 2 минуты таймаут
         });
         
         clearInterval(progressInterval);
-        updateProgress(100, 50);
         
         if (!response.ok) {
-            throw new Error('Network response was not ok');
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Network response was not ok');
         }
         
         const data = await response.json();
         
+        // Проверяем данные
+        if (!data.transcription || !data.summary) {
+            throw new Error('Invalid response data');
+        }
+        
         updateProgress(100, 100);
         
         document.getElementById('transcription').querySelector('.content').innerText = 
-            data.transcription || 'Transcription failed';
+            data.transcription;
         document.getElementById('summary').querySelector('.content').innerText = 
-            data.summary || 'Summary failed';
+            data.summary;
 
+    } catch (error) {
+        console.error('Error details:', error);
+        alert(`Error processing video: ${error.message}`);
+        document.getElementById('transcription').querySelector('.content').innerText = 
+            'Error occurred: ' + error.message;
+        document.getElementById('summary').querySelector('.content').innerText = 
+            'Processing failed. Please try again.';
+    } finally {
+        // Скрываем прогресс через 2 секунды
         setTimeout(() => {
             document.getElementById('progress-container').style.display = 'none';
+            updateProgress(0, 0);
         }, 2000);
-        
-    } catch (error) {
-        alert('Error processing video: ' + error.message);
-        document.getElementById('transcription').querySelector('.content').innerText = 'Error occurred';
-        document.getElementById('summary').querySelector('.content').innerText = 'Error occurred';
-        document.getElementById('progress-container').style.display = 'none';
     }
-}
-
-function copyText(elementId) {
-    const text = document.getElementById(elementId).querySelector('.content').innerText;
-    navigator.clipboard.writeText(text);
-    
-    const btn = document.getElementById(elementId).querySelector('.copy-btn');
-    const originalText = btn.innerText;
-    btn.innerText = 'Copied!';
-    btn.classList.add('btn-success');
-    btn.classList.remove('btn-secondary');
-    
-    setTimeout(() => {
-        btn.innerText = originalText;
-        btn.classList.remove('btn-success');
-        btn.classList.add('btn-secondary');
-    }, 2000);
 }
