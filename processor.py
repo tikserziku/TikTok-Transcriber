@@ -61,44 +61,73 @@ class TikTokProcessor:
         return f"{name}_{timestamp}{ext}"
 
     def download_video(self, url: str) -> str:
+        """Загрузка видео из TikTok с расширенной обработкой ошибок"""
         if not self.validate_url(url):
             raise ValueError("Invalid TikTok URL format")
-
+    
         def _download():
             file_id = os.urandom(4).hex()
             ydl_opts = {
                 'format': 'best',
                 'outtmpl': os.path.join(self.temp_dir, f'video_{file_id}.%(ext)s'),
-                'quiet': True,
-                'no_warnings': True,
+                'quiet': False,  # Включаем вывод для лучшего логирования
+                'no_warnings': False,  # Включаем предупреждения
                 'extract_flat': False,
                 'force_generic_extractor': False,
                 'ignoreerrors': False,
                 'nocheckcertificate': True,
                 'headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
                     'Accept-Language': 'en-US,en;q=0.5',
-                    'Upgrade-Insecure-Requests': '1'
-                }
+                    'Upgrade-Insecure-Requests': '1',
+                    'Referer': 'https://www.tiktok.com/'
+                },
+                'socket_timeout': 30,  # Увеличиваем таймаут
+                'retries': 10,  # Увеличиваем количество попыток
             }
             
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-                
-                if os.path.exists(filename):
-                    return filename
-                
-                base, _ = os.path.splitext(filename)
-                for ext in ['.mp4', '.webm', '.mkv']:
-                    alt_filename = base + ext
-                    if os.path.exists(alt_filename):
-                        return alt_filename
-                
-                raise FileNotFoundError("Downloaded video file not found")
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    # Сначала пробуем получить информацию
+                    logger.info(f"Attempting to extract video info for URL: {url}")
+                    info = ydl.extract_info(url, download=False)
+                    if not info:
+                        raise ValueError("Could not extract video information")
+                    
+                    logger.info("Video info extracted successfully, starting download")
+                    # Затем загружаем видео
+                    ydl.download([url])
+                    
+                    filename = ydl.prepare_filename(info)
+                    logger.info(f"Prepared filename: {filename}")
+                    
+                    if os.path.exists(filename):
+                        logger.info(f"Video downloaded successfully: {filename}")
+                        return filename
+                    
+                    # Проверяем альтернативные расширения
+                    base, _ = os.path.splitext(filename)
+                    for ext in ['.mp4', '.webm', '.mkv']:
+                        alt_filename = base + ext
+                        if os.path.exists(alt_filename):
+                            logger.info(f"Found video with alternative extension: {alt_filename}")
+                            return alt_filename
+                    
+                    raise FileNotFoundError(f"Downloaded file not found. Checked: {filename} and alternatives")
+                    
+            except yt_dlp.utils.DownloadError as e:
+                logger.error(f"yt-dlp download error: {str(e)}")
+                raise ValueError(f"Failed to download video: {str(e)}")
+            except Exception as e:
+                logger.error(f"Unexpected error during download: {str(e)}")
+                raise
 
+    try:
         return self.retry_strategy.execute(_download)
+    except Exception as e:
+        logger.error(f"All download attempts failed: {str(e)}")
+        raise ValueError("Failed to download video after multiple attempts. Please try again later or check the URL.")
 
     def extract_audio(self, video_path: str) -> str:
         def _extract():
