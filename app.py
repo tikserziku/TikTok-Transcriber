@@ -10,6 +10,9 @@ from moviepy.editor import VideoFileClip
 from pydub import AudioSegment
 import yt_dlp
 from langdetect import detect
+import uuid
+import re
+
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -62,6 +65,55 @@ class TikTokTranscriber:
         logger.error(f"TikTok download error: {e}")
         raise ValueError(f"Failed to download TikTok video: {str(e)}")
 
+    def validate_tiktok_url(self, url: str) -> bool:
+    """Проверка корректности URL TikTok"""
+    patterns = [
+        r'https?://(?:www\.)?tiktok\.com/.+',
+        r'https?://(?:vm|vt)\.tiktok\.com/.+'
+    ]
+    return any(re.match(pattern, url) for pattern in patterns)
+
+def process_url(self, url: str, progress=gr.Progress()) -> Tuple[str, str]:
+    """Основной процесс обработки URL"""
+    try:
+        if not url:
+            return "Error: Please provide a TikTok URL", ""
+        
+        if not self.validate_tiktok_url(url):
+            return "Error: Invalid TikTok URL format", ""
+            
+        # Загрузка видео
+        progress(0.2, desc="Downloading TikTok video...")
+        video_path = self.download_tiktok(url)
+        
+        # Извлечение и оптимизация аудио
+        progress(0.4, desc="Extracting audio...")
+        audio_path = self.extract_audio(video_path)
+        optimized_audio = self.optimize_audio(audio_path)
+        
+        # Транскрибация
+        progress(0.6, desc="Transcribing audio...")
+        transcript = self.transcribe_audio(optimized_audio)
+        
+        # Генерация саммари
+        progress(0.8, desc="Generating summary...")
+        summary = self.generate_summary(transcript)
+        
+        progress(1.0, desc="Done!")
+        return transcript, summary
+        
+    except Exception as e:
+        logger.error(f"Processing error: {e}")
+        return f"Error: {str(e)}", ""
+    finally:
+        # Очистка временных файлов
+        try:
+            if os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
+            self.temp_dir = tempfile.mkdtemp()
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
+    
     def extract_audio(self, video_path: str) -> str:
         """Извлечение аудио из видео"""
         try:
