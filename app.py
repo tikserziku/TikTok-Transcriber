@@ -209,4 +209,6 @@ def create_interface():
 
 if __name__ == "__main__":
     app = create_interface()
-    app.launch(server_name="0.0.0.0", show_api=False)
+    # Получаем порт из переменных окружения Heroku
+    port = int(os.environ.get("PORT", 7860))
+    app.launch(server_name="0.0.0.0", server_port=port)
