@@ -8,6 +8,7 @@ import logging
 import os
 from processor import TikTokProcessor
 from concurrent.futures import ThreadPoolExecutor
+import shutil  # Import shutil
 
 # Настройка логирования
 logging.basicConfig(
@@ -25,18 +26,22 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+
 class VideoRequest(BaseModel):
     url: str
     target_language: str
+
 
 @app.on_event("startup")
 async def startup_event():
     logger.info("Application starting up...")
 
+
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Application shutting down...")
     thread_pool.shutdown(wait=False)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -46,28 +51,28 @@ async def read_root(request: Request):
         logger.error(f"Error rendering index page: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
+
 @app.post("/process")
 async def process_video(video_request: VideoRequest):
     processor = TikTokProcessor()
-    
-    async def run_processing():
-    try:
-        result = await asyncio.to_thread(
-            processor.process_video,
-            video_request.url,
-            video_request.target_language
-        )
-        return result
-    except Exception as e:
-        logger.error(f"Processing error in thread: {str(e)}")
-        raise
 
+    async def run_processing():
+        try:
+            result = await asyncio.to_thread(
+                processor.process_video,
+                video_request.url,
+                video_request.target_language
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Processing error in thread: {str(e)}")
+            raise
 
     try:
         # Проверка языка
         valid_languages = ['en', 'ru', 'lt']
-        if request.target_language not in valid_languages:
-            raise ValueError("Неподдерживаемый язык")
+        if video_request.target_language not in valid_languages:
+            raise HTTPException(status_code=400, detail="Unsupported language")
 
         # Обработка с таймаутом
         try:
@@ -76,29 +81,23 @@ async def process_video(video_request: VideoRequest):
                 timeout=300
             )
         except asyncio.TimeoutError:
-            raise HTTPException(status_code=408, detail="Превышено время ожидания запроса")
+            raise HTTPException(status_code=408, detail="Request Timeout")
 
         return {
             "transcription": transcript,
             "summary": summary
         }
 
-    except ValueError as ve:
-        logger.warning(f"Validation error: {str(ve)}")
-        raise HTTPException(status_code=400, detail=str(ve))
+    except HTTPException:
+        raise  # Re-raise HTTPExceptions
     except Exception as e:
         logger.error(f"Processing error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Ошибка при обработке видео")
+        raise HTTPException(status_code=500, detail="Video processing failed")
     finally:
-        # Очистка временных файлов
-        try:
-            if hasattr(processor, 'cleanup'):
-                await asyncio.get_event_loop().run_in_executor(
-                    thread_pool,
-                    processor.cleanup
-                )
-        except Exception as e:
-            logger.error(f"Cleanup error: {str(e)}")
+        # Ensure cleanup happens. No async needed for shutil.rmtree
+        if hasattr(processor, 'temp_dir') and os.path.exists(processor.temp_dir):
+            shutil.rmtree(processor.temp_dir)
+
 
 if __name__ == "__main__":
     import uvicorn
