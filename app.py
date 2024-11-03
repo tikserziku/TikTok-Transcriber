@@ -2,240 +2,213 @@ import os
 import tempfile
 import logging
 import shutil
-from typing import Optional, Tuple
+from typing import Optional
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 import google.generativeai as genai
-from dotenv import load_dotenv
-import gradio as gr
 from moviepy.editor import VideoFileClip
 from pydub import AudioSegment
 import yt_dlp
 from langdetect import detect
-import uuid
-import re
 
-# Загружаем переменные окружения
-load_dotenv()
+# Инициализация FastAPI
+app = FastAPI()
 
-# Настройка логирования
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# HTML шаблон для главной страницы
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TikTok Transcriber</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; }
+        .result-box {
+            min-height: 200px;
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">📱 TikTok Transcriber</h1>
+        
+        <div class="row mb-3">
+            <div class="col">
+                <input type="text" id="tiktokUrl" class="form-control" placeholder="Вставьте ссылку на TikTok видео">
+            </div>
+        </div>
+        
+        <div class="row mb-3">
+            <div class="col">
+                <select id="language" class="form-select">
+                    <option value="en">English</option>
+                    <option value="ru">Русский</option>
+                    <option value="lt">Lietuvių</option>
+                </select>
+            </div>
+            <div class="col">
+                <button onclick="processVideo()" class="btn btn-primary">Обработать</button>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <h3>Transcription</h3>
+                <div id="transcription" class="result-box">
+                    <button onclick="copyText('transcription')" class="btn btn-sm btn-secondary">Copy</button>
+                    <div class="content"></div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <h3>Summary</h3>
+                <div id="summary" class="result-box">
+                    <button onclick="copyText('summary')" class="btn btn-sm btn-secondary">Copy</button>
+                    <div class="content"></div>
+                </div>
+            </div>
+        </div>
+    </div>
 
-class TikTokTranscriber:
+    <script>
+        async function processVideo() {
+            const url = document.getElementById('tiktokUrl').value;
+            const lang = document.getElementById('language').value;
+            
+            // Показываем статус загрузки
+            document.getElementById('transcription').querySelector('.content').innerText = 'Processing...';
+            document.getElementById('summary').querySelector('.content').innerText = 'Processing...';
+            
+            try {
+                const response = await fetch('/process', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        url: url,
+                        target_language: lang
+                    })
+                });
+                
+                const data = await response.json();
+                
+                document.getElementById('transcription').querySelector('.content').innerText = data.transcription;
+                document.getElementById('summary').querySelector('.content').innerText = data.summary;
+            } catch (error) {
+                alert('Error processing video: ' + error);
+            }
+        }
+        
+        function copyText(elementId) {
+            const text = document.getElementById(elementId).querySelector('.content').innerText;
+            navigator.clipboard.writeText(text);
+        }
+    </script>
+</body>
+</html>
+"""
+
+# Модель для входных данных
+class VideoRequest(BaseModel):
+    url: str
+    target_language: str
+
+class TikTokProcessor:
     def __init__(self):
-        # Инициализация Google AI
         api_key = os.getenv('GOOGLE_API_KEY')
         if not api_key:
-            raise ValueError("Google API key not found in environment variables")
+            raise ValueError("Google API key not found")
         
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-1.5-pro')
         self.temp_dir = tempfile.mkdtemp()
 
-    def download_tiktok(self, url: str) -> str:
-        """Загрузка видео из TikTok с коротким именем файла"""
+    def process_video(self, url: str, target_language: str):
         try:
-            # Создаем уникальный короткий ID для файла
-            file_id = str(uuid.uuid4())[:8]
-            
-            ydl_opts = {
-                'format': 'best',
-                # Используем короткое имя файла с ID
-                'outtmpl': os.path.join(self.temp_dir, f'tiktok_{file_id}.%(ext)s'),
-                'quiet': True,
-            }
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-                
-                # Проверяем существование файла
-                if os.path.exists(filename):
-                    return filename
-                # Если файл имеет расширение .part, пробуем найти настоящий файл
-                base_path = os.path.splitext(filename)[0]
-                for ext in ['.mp4', '.webm', '.mkv']:
-                    if os.path.exists(base_path + ext):
-                        return base_path + ext
-                        
-                raise FileNotFoundError("Downloaded file not found")
-                
-        except Exception as e:
-            logger.error(f"TikTok download error: {e}")
-            raise ValueError(f"Failed to download TikTok video: {str(e)}")
-
-    def validate_tiktok_url(self, url: str) -> bool:
-        """Проверка корректности URL TikTok"""
-        patterns = [
-            r'https?://(?:www\.)?tiktok\.com/.+',
-            r'https?://(?:vm|vt)\.tiktok\.com/.+'
-        ]
-        return any(re.match(pattern, url) for pattern in patterns)
-
-    def extract_audio(self, video_path: str) -> str:
-        """Извлечение аудио из видео"""
-        try:
-            video = VideoFileClip(video_path)
-            audio_path = os.path.join(self.temp_dir, 'audio.mp3')
-            video.audio.write_audiofile(audio_path, codec='mp3', verbose=False, logger=None)
-            video.close()
-            return audio_path
-        except Exception as e:
-            logger.error(f"Audio extraction error: {e}")
-            raise
-
-    def optimize_audio(self, audio_path: str) -> str:
-        """Оптимизация аудио для транскрибации"""
-        try:
-            audio = AudioSegment.from_file(audio_path)
-            if audio.channels > 1:
-                audio = audio.set_channels(1)
-            audio = audio.set_frame_rate(16000)
-            audio = audio.normalize()
-            
-            optimized_path = os.path.join(self.temp_dir, 'optimized_audio.mp3')
-            audio.export(optimized_path, format='mp3')
-            return optimized_path
-        except Exception as e:
-            logger.error(f"Audio optimization error: {e}")
-            raise
-
-    def transcribe_audio(self, audio_path: str) -> str:
-        """Транскрибация аудио"""
-        try:
-            with open(audio_path, 'rb') as f:
-                audio_data = f.read()
-
-            response = self.model.generate_content([
-                "Transcribe this audio accurately, preserving all details and context.",
-                {
-                    "mime_type": "audio/mp3",
-                    "data": audio_data
-                }
-            ])
-            return response.text
-        except Exception as e:
-            logger.error(f"Transcription error: {e}")
-            raise
-
-    def generate_summary(self, text: str) -> str:
-        """Генерация саммари из транскрибации"""
-        try:
-            detected_lang = detect(text)
-            prompt = f"Generate a comprehensive but concise summary in the same language ({detected_lang}) of the following text:\n\n{text}"
-            
-            response = self.model.generate_content(prompt)
-            return response.text
-        except Exception as e:
-            logger.error(f"Summary generation error: {e}")
-            raise
-
-    def process_url(self, url: str, progress=gr.Progress()) -> Tuple[str, str]:
-        """Основной процесс обработки URL"""
-        try:
-            if not url:
-                return "Error: Please provide a TikTok URL", ""
-            
-            if not self.validate_tiktok_url(url):
-                return "Error: Invalid TikTok URL format", ""
-                
             # Загрузка видео
-            progress(0.2, desc="Downloading TikTok video...")
-            video_path = self.download_tiktok(url)
+            video_path = self._download_video(url)
             
-            # Извлечение и оптимизация аудио
-            progress(0.4, desc="Extracting audio...")
-            audio_path = self.extract_audio(video_path)
-            optimized_audio = self.optimize_audio(audio_path)
+            # Извлечение аудио
+            audio_path = self._extract_audio(video_path)
             
             # Транскрибация
-            progress(0.6, desc="Transcribing audio...")
-            transcript = self.transcribe_audio(optimized_audio)
+            transcript = self._transcribe_audio(audio_path)
             
-            # Генерация саммари
-            progress(0.8, desc="Generating summary...")
-            summary = self.generate_summary(transcript)
+            # Саммари
+            summary = self._generate_summary(transcript, target_language)
             
-            progress(1.0, desc="Done!")
             return transcript, summary
             
-        except Exception as e:
-            logger.error(f"Processing error: {e}")
-            return f"Error: {str(e)}", ""
         finally:
-            # Очистка временных файлов
-            try:
-                if os.path.exists(self.temp_dir):
-                    shutil.rmtree(self.temp_dir)
+            if os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
                 self.temp_dir = tempfile.mkdtemp()
-            except Exception as e:
-                logger.error(f"Cleanup error: {e}")
 
-def create_interface():
-    """Создание веб-интерфейса"""
-    transcriber = TikTokTranscriber()
-    
-    with gr.Blocks(theme=gr.themes.Soft()) as interface:
-        gr.Markdown("""
-        # 📱 TikTok Transcriber
-        Введите ссылку на TikTok видео для получения транскрипции и саммари
-        """)
+    def _download_video(self, url: str) -> str:
+        file_id = os.urandom(4).hex()
+        ydl_opts = {
+            'format': 'best',
+            'outtmpl': os.path.join(self.temp_dir, f'video_{file_id}.%(ext)s'),
+            'quiet': True
+        }
         
-        with gr.Row():
-            url_input = gr.Textbox(
-                label="TikTok URL",
-                placeholder="https://vm.tiktok.com/... или https://www.tiktok.com/...",
-                scale=4
-            )
-            paste_btn = gr.Button("📋 PASTE", scale=1)
-            process_btn = gr.Button("🎯 Process", scale=1, variant="primary")
-            
-        with gr.Row():
-            # Колонка с транскрипцией
-            with gr.Column():
-                transcript_output = gr.Textbox(
-                    label="Transcription",
-                    placeholder="Transcription will appear here...",
-                    lines=10,
-                    show_copy_button=True
-                )
-            
-            # Колонка с саммари
-            with gr.Column():
-                summary_output = gr.Textbox(
-                    label="Summary",
-                    placeholder="Summary will appear here...",
-                    lines=10,
-                    show_copy_button=True
-                )
-        
-        # Убираем JavaScript и добавляем простую функцию для paste
-        def paste_from_clipboard():
-            return ""  # В веб-интерфейсе пользователь будет использовать Ctrl+V
-        
-        # Обработчики событий
-        paste_btn.click(
-            fn=paste_from_clipboard,
-            inputs=None,
-            outputs=url_input
-        )
-        
-        process_btn.click(
-            fn=transcriber.process_url,
-            inputs=[url_input],
-            outputs=[transcript_output, summary_output],
-        )
-        
-        gr.Markdown("""
-        ### 📝 Инструкция:
-        1. Вставьте ссылку на видео TikTok (используйте Ctrl+V или введите вручную)
-        2. Нажмите Process для начала обработки
-        3. Дождитесь результатов
-        4. Используйте кнопки копирования для сохранения текста
-        """)
-    
-    return interface
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            return ydl.prepare_filename(info)
 
+    def _extract_audio(self, video_path: str) -> str:
+        video = VideoFileClip(video_path)
+        audio_path = os.path.join(self.temp_dir, 'audio.mp3')
+        video.audio.write_audiofile(audio_path, codec='mp3', verbose=False)
+        video.close()
+        return audio_path
+
+    def _transcribe_audio(self, audio_path: str) -> str:
+        with open(audio_path, 'rb') as f:
+            audio_data = f.read()
+
+        response = self.model.generate_content([
+            "Transcribe this audio accurately, preserving all details and context.",
+            {
+                "mime_type": "audio/mp3",
+                "data": audio_data
+            }
+        ])
+        return response.text
+
+    def _generate_summary(self, text: str, target_language: str) -> str:
+        language_prompts = {
+            'en': 'Generate a comprehensive summary in English:',
+            'ru': 'Составьте подробное резюме на русском языке:',
+            'lt': 'Sukurkite išsamią santrauką lietuvių kalba:'
+        }
+        
+        prompt = f"{language_prompts.get(target_language, language_prompts['en'])} {text}"
+        response = self.model.generate_content(prompt)
+        return response.text
+
+# Маршруты FastAPI
+@app.get("/", response_class=HTMLResponse)
+async def read_root():
+    return HTML_TEMPLATE
+
+@app.post("/process")
+async def process_video(request: VideoRequest):
+    processor = TikTokProcessor()
+    try:
+        transcript, summary = processor.process_video(request.url, request.target_language)
+        return {"transcription": transcript, "summary": summary}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+# Запуск приложения
 if __name__ == "__main__":
-    app = create_interface()
-    port = int(os.environ.get("PORT", 7860))
-    app.launch(server_name="0.0.0.0", server_port=port)
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
