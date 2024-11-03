@@ -13,13 +13,14 @@ WORKDIR /app
 
 # Копирование файлов проекта
 COPY requirements.txt .
-COPY app.py .
+COPY main.py .
+COPY Procfile .
 
 # Установка Python зависимостей
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Переменные окружения
-ENV PORT=8080
+ENV PORT=8000
 
-# Запуск приложения
-CMD python app.py
+# Запуск приложения через Procfile
+CMD uvicorn main:app --host=0.0.0.0 --port=$PORT
