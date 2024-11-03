@@ -1,79 +1,93 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>TikTok Transcriber</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/css/style.css" rel="stylesheet">
-</head>
-<body>
-    <div class="container">
-        <h1 class="mb-4 text-center">📱 TikTok Transcriber</h1>
-        
-        <!-- URL Input -->
-        <div class="mb-3">
-            <input type="text" 
-                   id="tiktokUrl" 
-                   class="form-control form-control-lg" 
-                   placeholder="Вставьте ссылку на TikTok видео">
-        </div>
-        
-        <!-- Language Selection and Process Button -->
-        <div class="mb-3">
-            <select id="language" class="form-select form-select-lg mb-3">
-                <option value="en">English</option>
-                <option value="ru" selected>Русский</option>
-                <option value="lt">Lietuvių</option>
-            </select>
-            <button id="processButton" class="btn btn-primary btn-lg w-100">Обработать</button>
-        </div>
+async function processVideo() {
+    const url = document.getElementById('tiktokUrl').value;
+    const lang = document.getElementById('language').value;
 
-        <!-- Progress Bars -->
-        <div id="progress-container" class="progress-container d-none">
-            <div class="progress-label">Загрузка видео</div>
-            <div class="progress mb-3">
-                <div id="download-progress" class="progress-bar" 
-                     role="progressbar" aria-valuenow="0" aria-valuemin="0" 
-                     aria-valuemax="100" style="width: 0%">0%</div>
-            </div>
-            
-            <div class="progress-label">Обработка видео</div>
-            <div class="progress mb-3">
-                <div id="process-progress" class="progress-bar bg-success" 
-                     role="progressbar" aria-valuenow="0" aria-valuemin="0" 
-                     aria-valuemax="100" style="width: 0%">0%</div>
-            </div>
-        </div>
-        
-        <!-- Results -->
-        <div class="row">
-            <!-- Transcription -->
-            <div class="col-12 mb-4">
-                <h3>Transcription</h3>
-                <div id="transcription" class="result-box">
-                    <button type="button" class="btn btn-sm btn-secondary copy-btn" data-action="copy">
-                        Copy
-                    </button>
-                    <div class="content"></div>
-                </div>
-            </div>
+    if (!url) {
+        alert('Please enter TikTok URL');
+        return;
+    }
 
-            <!-- Summary -->
-            <div class="col-12 mb-4">
-                <h3>Summary</h3>
-                <div id="summary" class="result-box">
-                    <button type="button" class="btn btn-sm btn-secondary copy-btn" data-action="copy">
-                        Copy
-                    </button>
-                    <div class="content"></div>
-                </div>
-            </div>
-        </div>
-    </div>
+    // Show progress container
+    const progressContainer = document.getElementById('progress-container');
+    progressContainer.style.display = 'block';
 
-    <!-- Scripts -->
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="/static/js/script.js"></script>
-</body>
-</html>
+    // Progress bar elements
+    const downloadProgress = document.getElementById('download-progress');
+    const processProgress = document.getElementById('process-progress');
+
+    // Initialize progress bars
+    updateProgress(downloadProgress, 0);
+    updateProgress(processProgress, 0);
+
+    // Clear previous results
+    document.getElementById('transcription').querySelector('.content').innerText = 'Processing...';
+    document.getElementById('summary').querySelector('.content').innerText = 'Processing...';
+
+    try {
+        let combinedPercent = 0;
+
+        // --- Download simulation ---
+        const downloadInterval = setInterval(() => {
+            if (combinedPercent < 50) {
+                combinedPercent += 1;
+                updateProgress(downloadProgress, combinedPercent); // Update download progress
+            }
+        }, 50);
+
+        const response = await fetch('/process', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ url: url, target_language: lang }),
+            timeout: 120000
+        });
+
+        clearInterval(downloadInterval); // Stop download simulation
+        updateProgress(downloadProgress, 100);  // Set download progress to 100%
+
+        // --- Processing simulation ---
+        let processPercent = 0;
+        const processInterval = setInterval(() => {
+            if (processPercent < 100) {
+                processPercent += 1;
+                updateProgress(processProgress, processPercent); // Update processing progress
+            } else {
+              clearInterval(processInterval); // Stop processing simulation
+
+            }
+        }, 50);
+
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Network response was not ok');
+        }
+
+        const data = await response.json();
+
+        // Update results
+        document.getElementById('transcription').querySelector('.content').innerText = data.transcription;
+        document.getElementById('summary').querySelector('.content').innerText = data.summary;
+
+    } catch (error) {
+        console.error('Error details:', error);
+        alert(`Error processing video: ${error.message}`);
+        document.getElementById('transcription').querySelector('.content').innerText = 'Error occurred: ' + error.message;
+        document.getElementById('summary').querySelector('.content').innerText = 'Processing failed. Please try again.';
+    } finally {
+        // Hide progress after a delay
+        setTimeout(() => {
+            progressContainer.style.display = 'none';
+            updateProgress(downloadProgress, 0); // Reset download progress bar
+            updateProgress(processProgress, 0); // Reset processing progress bar
+        }, 2000);
+    }
+}
+
+function updateProgress(progressBar, percent) {
+    if (progressBar) {
+        progressBar.style.width = `${percent}%`;
+        progressBar.innerText = `${percent}%`;
+    }
+}
