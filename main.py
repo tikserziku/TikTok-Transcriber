@@ -187,7 +187,7 @@ class TikTokProcessor:
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-1.5-pro')
         self.temp_dir = tempfile.mkdtemp()
-        
+
     def validate_url(self, url: str) -> bool:
         """Проверка корректности URL TikTok"""
         if not url:
@@ -209,63 +209,48 @@ class TikTokProcessor:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"{name}_{timestamp}{ext}"
 
-def download_video(self, url: str) -> str:
-    """Загрузка видео из TikTok"""
-    if not self.validate_url(url):
-        raise ValueError("Invalid TikTok URL format")
+    def download_video(self, url: str) -> str:
+        """Загрузка видео из TikTok"""
+        if not self.validate_url(url):
+            raise ValueError("Invalid TikTok URL format")
 
-    try:
-        file_id = os.urandom(4).hex()
-        ydl_opts = {
-            'format': 'best',
-            'outtmpl': os.path.join(self.temp_dir, f'video_{file_id}.%(ext)s'),
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-            'force_generic_extractor': False,
-            'ignoreerrors': False,
-            'nocheckcertificate': True,
-            'headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Upgrade-Insecure-Requests': '1',
-                'Cookie': 'tt_webid_v2=randomid'
-            }
-        }
-        
         try:
-            # Сначала получаем информацию
+            file_id = os.urandom(4).hex()
+            ydl_opts = {
+                'format': 'best',
+                'outtmpl': os.path.join(self.temp_dir, f'video_{file_id}.%(ext)s'),
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+                'force_generic_extractor': False,
+                'ignoreerrors': False,
+                'nocheckcertificate': True,
+                'headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Upgrade-Insecure-Requests': '1'
+                }
+            }
+            
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if info is None:
-                    raise ValueError("Could not extract video info")
-                
-                # Затем загружаем видео
+                info = ydl.extract_info(url, download=True)
                 filename = ydl.prepare_filename(info)
-                ydl.download([url])
                 
                 if os.path.exists(filename):
-                    logger.info(f"Video downloaded successfully: {filename}")
                     return filename
                     
-                # Проверяем альтернативные расширения
                 base, _ = os.path.splitext(filename)
                 for ext in ['.mp4', '.webm', '.mkv']:
                     alt_filename = base + ext
                     if os.path.exists(alt_filename):
-                        logger.info(f"Video found with different extension: {alt_filename}")
                         return alt_filename
                         
                 raise FileNotFoundError("Downloaded video file not found")
                 
         except Exception as e:
-            logger.error(f"Download failed: {str(e)}")
-            raise
-                
-    except Exception as e:
-        logger.error(f"Video download error: {str(e)}")
-        raise ValueError(f"Failed to download video: {str(e)}")
+            logger.error(f"Video download error: {str(e)}")
+            raise ValueError(f"Failed to download video: {str(e)}")
 
     def process_video(self, url: str, target_language: str) -> Tuple[str, str]:
         """Основной процесс обработки видео"""
