@@ -176,21 +176,17 @@ def create_interface():
                     show_copy_button=True
                 )
         
-        # JavaScript для кнопки PASTE
-        paste_js = """
-        async () => {
-            try {
-                const text = await navigator.clipboard.readText();
-                return text;
-            } catch (err) {
-                console.error('Failed to read clipboard:', err);
-                return "";
-            }
-        }
-        """
+        # Убираем JavaScript и добавляем простую функцию для paste
+        def paste_from_clipboard():
+            return ""  # В веб-интерфейсе пользователь будет использовать Ctrl+V
         
         # Обработчики событий
-        paste_btn.click(fn=None, inputs=None, outputs=url_input, _js=paste_js)
+        paste_btn.click(
+            fn=paste_from_clipboard,
+            inputs=None,
+            outputs=url_input
+        )
+        
         process_btn.click(
             fn=transcriber.process_url,
             inputs=[url_input],
@@ -199,7 +195,7 @@ def create_interface():
         
         gr.Markdown("""
         ### 📝 Инструкция:
-        1. Вставьте ссылку на видео TikTok (используйте кнопку PASTE или введите вручную)
+        1. Вставьте ссылку на видео TikTok (используйте Ctrl+V или введите вручную)
         2. Нажмите Process для начала обработки
         3. Дождитесь результатов
         4. Используйте кнопки копирования для сохранения текста
@@ -209,6 +205,5 @@ def create_interface():
 
 if __name__ == "__main__":
     app = create_interface()
-    # Получаем порт из переменных окружения Heroku
     port = int(os.environ.get("PORT", 7860))
     app.launch(server_name="0.0.0.0", server_port=port)
