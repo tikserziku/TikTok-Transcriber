@@ -47,20 +47,22 @@ async def read_root(request: Request):
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
 @app.post("/process")
-async def process_video(request: VideoRequest):
+async def process_video(video_request: VideoRequest):
     processor = TikTokProcessor()
     
     async def run_processing():
-        try:
-            return await asyncio.get_event_loop().run_in_executor(
-                thread_pool,
-                processor.process_video,
-                request.url,
-                request.target_language
-            )
-        except Exception as e:
-            logger.error(f"Processing error in thread: {str(e)}")
-            raise
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            thread_pool,
+            processor.process_video,
+            request.url,
+            request.target_language
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Processing error in thread: {str(e)}")
+        raise
+
 
     try:
         # Проверка языка
