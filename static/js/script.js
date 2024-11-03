@@ -7,32 +7,27 @@ async function processVideo() {
         return;
     }
 
-    // Показываем прогресс
+    // Индикаторы прогресса
     const progressContainer = document.getElementById('progress-container');
-    const downloadProgress = document.getElementById('download-progress'); // Correct ID
-    const processProgress = document.getElementById('process-progress'); // Correct ID
-    progressContainer.style.display = 'block';  // Make progress container visible
-
-    // Initialize BOTH progress bars
-    updateProgress(downloadProgress, 0); 
-    updateProgress(processProgress, 0);
-
+    const combinedProgress = document.getElementById('combined-progress');
+    const transcriptionProgress = document.getElementById('transcription-progress');
+    progressContainer.style.display = 'block';
 
     // Очищаем предыдущие результаты
     document.getElementById('transcription').querySelector('.content').innerText = 'Processing...';
     document.getElementById('summary').querySelector('.content').innerText = 'Processing...';
 
     try {
-        let downloadPercent = 0;
-        let processPercent = 0;
+        let combinedPercent = 0;
 
-        // Simulate download progress (replace with actual progress if available)
+        // --- Загрузка видео (симуляция) ---
         const downloadInterval = setInterval(() => {
-            if (downloadPercent < 95) {
-                downloadPercent += 1;
-                updateProgress(downloadProgress, downloadPercent);
+            if (combinedPercent < 50) {
+                combinedPercent += 1;
+                updateProgress(combinedProgress, combinedPercent, "Загрузка видео...");
             }
         }, 50);
+
 
         const response = await fetch('/process', {
             method: 'POST',
@@ -46,16 +41,20 @@ async function processVideo() {
             timeout: 120000  // 2 минуты таймаут
         });
 
-        clearInterval(downloadInterval);  // Stop download simulation
-        updateProgress(downloadProgress, 100);  // Download complete (100%)
 
-        // Simulate processing progress (replace with actual progress if available)
-        const processInterval = setInterval(() => {
-            if (processPercent < 100) {
-                processPercent += 1;
-                updateProgress(processProgress, processPercent);
+        clearInterval(downloadInterval);
+
+
+        // --- Конвертация в аудио (симуляция) ---
+        updateProgress(combinedProgress, combinedPercent, "Конвертация в аудио...");
+
+        const convertInterval = setInterval(() => {
+            if (combinedPercent < 100) {
+                combinedPercent += 1;
+                updateProgress(combinedProgress, combinedPercent, "Конвертация в аудио...");
             } else {
-                clearInterval(processInterval);
+                clearInterval(convertInterval);
+                updateProgress(combinedProgress, combinedPercent, "Обработка...");
             }
         }, 50);
 
@@ -68,8 +67,16 @@ async function processVideo() {
         const data = await response.json();
 
 
+
+        clearInterval(convertInterval); // Stop convert simulation
+
+
+        updateProgress(transcriptionProgress, 0, "Транскрибация...");
+
+
         document.getElementById('transcription').querySelector('.content').innerText = data.transcription;
         document.getElementById('summary').querySelector('.content').innerText = data.summary;
+        updateProgress(transcriptionProgress, 100, "Транскрибация завершена");  // Update transcription progress to 100%
 
 
     } catch (error) {
@@ -78,21 +85,18 @@ async function processVideo() {
         document.getElementById('transcription').querySelector('.content').innerText = 'Error occurred: ' + error.message;
         document.getElementById('summary').querySelector('.content').innerText = 'Processing failed. Please try again.';
     } finally {
-        // Скрываем прогресс через 2 секунды
         setTimeout(() => {
             progressContainer.style.display = 'none';
-            updateProgress(downloadProgress, 0); // Reset download progress
-            updateProgress(processProgress, 0); // Reset process progress
+            updateProgress(combinedProgress, 0, "");
+            updateProgress(transcriptionProgress, 0, "");
+
         }, 2000);
     }
 }
 
-
-
-function updateProgress(progressBar, percent) { // Takes the progress bar element and percent
-
+function updateProgress(progressBar, percent, text = "") {
     if (progressBar) {
         progressBar.style.width = `${percent}%`;
-        progressBar.innerText = `${percent}%`;
+        progressBar.innerText = text || `${percent}%`;
     }
 }
