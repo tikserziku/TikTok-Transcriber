@@ -5,8 +5,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 import logging
-from processor import TikTokProcessor
 import os
+from processor import TikTokProcessor
+from concurrent.futures import ThreadPoolExecutor
 
 # Настройка логирования
 logging.basicConfig(
@@ -15,11 +16,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(
-    title="TikTok Transcriber",
-    description="Application for transcribing and summarizing TikTok videos",
-    version="1.0.0"
-)
+# Инициализация ThreadPool для асинхронных операций
+thread_pool = ThreadPoolExecutor(max_workers=3)
+
+app = FastAPI()
 
 # Подключаем статические файлы и шаблоны
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -29,50 +29,15 @@ class VideoRequest(BaseModel):
     url: str
     target_language: str
 
-# Обработчики ошибок
-@app.exception_handler(404)
-async def not_found_exception_handler(request: Request, exc: HTTPException):
-    return templates.TemplateResponse(
-        "errors/404.html",
-        {
-            "request": request,
-            "message": "Запрашиваемая страница не найдена"
-        },
-        status_code=404
-    )
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Application starting up...")
 
-@app.exception_handler(500)
-async def server_error_handler(request: Request, exc: HTTPException):
-    return templates.TemplateResponse(
-        "errors/500.html",
-        {
-            "request": request,
-            "message": "Внутренняя ошибка сервера"
-        },
-        status_code=500
-    )
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Application shutting down...")
+    thread_pool.shutdown(wait=False)
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    return templates.TemplateResponse(
-        "errors/error.html",
-        {
-            "request": request,
-            "status_code": exc.status_code,
-            "message": exc.detail
-        },
-        status_code=exc.status_code
-    )
-
-# Обработчик ошибок валидации
-@app.exception_handler(ValueError)
-async def value_error_handler(request: Request, exc: ValueError):
-    return JSONResponse(
-        status_code=400,
-        content={"error": str(exc)}
-    )
-
-# Основные маршруты
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     try:
@@ -80,6 +45,19 @@ async def read_root(request: Request):
     except Exception as e:
         logger.error(f"Error rendering index page: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+async def process_in_thread(processor: TikTokProcessor, url: str, target_language: str):
+    """Выполнение обработки в отдельном потоке"""
+    try:
+        return await asyncio.get_event_loop().run_in_executor(
+            thread_pool,
+            processor.process_video,
+            url,
+            target_language
+        )
+    except Exception as e:
+        logger.error(f"Thread processing error: {str(e)}")
+        raise
 
 @app.post("/process")
 async def process_video(request: VideoRequest):
@@ -90,13 +68,12 @@ async def process_video(request: VideoRequest):
         if request.target_language not in valid_languages:
             raise ValueError("Неподдерживаемый язык")
 
-        # Устанавливаем таймаут на 5 минут
+        # Обработка в отдельном потоке с таймаутом
         try:
-            response = await asyncio.wait_for(
-                asyncio.to_thread(processor.process_video, request.url, request.target_language),
+            transcript, summary = await asyncio.wait_for(
+                process_in_thread(processor, request.url, request.target_language),
                 timeout=300
             )
-            transcript, summary = response
         except asyncio.TimeoutError:
             raise HTTPException(status_code=408, detail="Превышено время ожидания запроса")
         
@@ -114,34 +91,25 @@ async def process_video(request: VideoRequest):
     finally:
         # Очистка временных файлов
         try:
-            processor.cleanup()
+            if hasattr(processor, 'cleanup'):
+                await asyncio.get_event_loop().run_in_executor(
+                    thread_pool,
+                    processor.cleanup
+                )
         except Exception as e:
             logger.error(f"Cleanup error: {str(e)}")
-
-# Middleware для логирования запросов
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    logger.info(f"Request: {request.method} {request.url}")
-    try:
-        response = await call_next(request)
-        logger.info(f"Response status: {response.status_code}")
-        return response
-    except Exception as e:
-        logger.error(f"Request failed: {str(e)}")
-        raise
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     
-    # Настройки для uvicorn
-    config = uvicorn.Config(
-        app=app,
+    uvicorn.run(
+        "main:app",
         host="0.0.0.0",
         port=port,
-        log_level="info",
-        reload=True if os.getenv("DEBUG") else False
+        workers=2,
+        loop="asyncio",
+        timeout_keep_alive=120,
+        access_log=True,
+        log_level="info"
     )
-    
-    server = uvicorn.Server(config)
-    server.run()
