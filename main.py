@@ -20,6 +20,157 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# HTML шаблон
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TikTok Transcriber</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { padding: 20px; }
+        .result-box {
+            min-height: 200px;
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            position: relative;
+        }
+        .copy-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+        }
+        .spinner {
+            display: none;
+            width: 50px;
+            height: 50px;
+            margin: 20px auto;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="mb-4">📱 TikTok Transcriber</h1>
+        
+        <div class="row mb-3">
+            <div class="col">
+                <input type="text" id="tiktokUrl" class="form-control" 
+                    placeholder="Вставьте ссылку на TikTok видео (например: https://vm.tiktok.com/...)">
+            </div>
+        </div>
+        
+        <div class="row mb-3">
+            <div class="col-md-4">
+                <select id="language" class="form-select">
+                    <option value="en">English</option>
+                    <option value="ru">Русский</option>
+                    <option value="lt">Lietuvių</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button onclick="processVideo()" class="btn btn-primary w-100">Обработать</button>
+            </div>
+        </div>
+
+        <div id="spinner" class="spinner"></div>
+        
+        <div class="row">
+            <div class="col-md-6">
+                <h3>Transcription</h3>
+                <div id="transcription" class="result-box">
+                    <button onclick="copyText('transcription')" class="btn btn-sm btn-secondary copy-btn">
+                        Copy
+                    </button>
+                    <div class="content"></div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <h3>Summary</h3>
+                <div id="summary" class="result-box">
+                    <button onclick="copyText('summary')" class="btn btn-sm btn-secondary copy-btn">
+                        Copy
+                    </button>
+                    <div class="content"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function processVideo() {
+            const url = document.getElementById('tiktokUrl').value;
+            const lang = document.getElementById('language').value;
+            
+            if (!url) {
+                alert('Please enter TikTok URL');
+                return;
+            }
+
+            // Показываем спиннер
+            document.getElementById('spinner').style.display = 'block';
+            
+            // Очищаем предыдущие результаты
+            document.getElementById('transcription').querySelector('.content').innerText = 'Processing...';
+            document.getElementById('summary').querySelector('.content').innerText = 'Processing...';
+            
+            try {
+                const response = await fetch('/process', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        url: url,
+                        target_language: lang
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                
+                const data = await response.json();
+                
+                document.getElementById('transcription').querySelector('.content').innerText = 
+                    data.transcription || 'Transcription failed';
+                document.getElementById('summary').querySelector('.content').innerText = 
+                    data.summary || 'Summary failed';
+            } catch (error) {
+                alert('Error processing video: ' + error.message);
+                document.getElementById('transcription').querySelector('.content').innerText = 'Error occurred';
+                document.getElementById('summary').querySelector('.content').innerText = 'Error occurred';
+            } finally {
+                // Скрываем спиннер
+                document.getElementById('spinner').style.display = 'none';
+            }
+        }
+        
+        function copyText(elementId) {
+            const text = document.getElementById(elementId).querySelector('.content').innerText;
+            navigator.clipboard.writeText(text);
+            
+            // Показываем уведомление о копировании
+            const btn = document.getElementById(elementId).querySelector('.copy-btn');
+            const originalText = btn.innerText;
+            btn.innerText = 'Copied!';
+            setTimeout(() => {
+                btn.innerText = originalText;
+            }, 2000);
+        }
+    </script>
+</body>
+</html>
+"""
 class VideoRequest(BaseModel):
     url: str
     target_language: str
@@ -61,22 +212,19 @@ class TikTokProcessor:
             raise ValueError("Invalid TikTok URL format")
 
         try:
-            video_opts = {
-                'outtmpl': os.path.join(self.temp_dir, '%(id)s.%(ext)s'),
+            file_id = os.urandom(4).hex()
+            ydl_opts = {
                 'format': 'best',
-                'noplaylist': True,
+                'outtmpl': os.path.join(self.temp_dir, f'video_{file_id}.%(ext)s'),
+                'quiet': True
             }
-
-            with yt_dlp.YoutubeDL(video_opts) as ydl:
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
-                video_filename = ydl.prepare_filename(info)
-                video_safe_filename = self.get_safe_filename(
-                    f"tiktok_video_{os.path.basename(video_filename)}"
-                )
-                video_safe_path = os.path.join(self.temp_dir, video_safe_filename)
-                if os.path.exists(video_filename):
-                    os.rename(video_filename, video_safe_path)
-                    return video_safe_path
+                filename = ydl.prepare_filename(info)
+                
+                if os.path.exists(filename):
+                    return filename
                 raise FileNotFoundError("Downloaded video file not found")
                 
         except Exception as e:
@@ -88,12 +236,14 @@ class TikTokProcessor:
         try:
             # Загрузка видео
             video_path = self.download_video(url)
+            logger.info(f"Video downloaded: {video_path}")
             
             # Извлечение аудио
             audio_path = os.path.join(self.temp_dir, 'audio.mp3')
             video = VideoFileClip(video_path)
             video.audio.write_audiofile(audio_path, codec='mp3', verbose=False)
             video.close()
+            logger.info(f"Audio extracted: {audio_path}")
             
             # Транскрибация
             with open(audio_path, 'rb') as f:
@@ -108,6 +258,7 @@ class TikTokProcessor:
                 }
             ])
             transcript = response.text
+            logger.info("Transcription completed")
             
             # Генерируем саммари
             language_prompts = {
@@ -119,6 +270,7 @@ class TikTokProcessor:
             prompt = f"{language_prompts.get(target_language, language_prompts['en'])} {transcript}"
             summary_response = self.model.generate_content(prompt)
             summary = summary_response.text
+            logger.info("Summary generated")
             
             return transcript, summary
             
@@ -132,8 +284,6 @@ class TikTokProcessor:
                 self.temp_dir = tempfile.mkdtemp()
             except Exception as e:
                 logger.error(f"Cleanup error: {str(e)}")
-
-# HTML шаблон (оставьте тот же HTML_TEMPLATE, что был раньше)
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
@@ -149,4 +299,11 @@ async def process_video(request: VideoRequest):
             "summary": summary
         }
     except Exception as e:
+        logger.error(f"Request processing error: {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
+
+# Если запускаем напрямую
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
