@@ -1,15 +1,18 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
-import google.generativeai as genai
 import os
+import sys
 import tempfile
 import logging
 import shutil
-import yt_dlp
 import re
 from datetime import datetime
 from typing import Optional, Tuple
+from pathlib import Path
+
+import yt_dlp
+import google.generativeai as genai
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from moviepy.editor import VideoFileClip
 from pydub import AudioSegment
 from langdetect import detect
@@ -228,16 +231,12 @@ def download_video(self, url: str) -> str:
                 'Accept-Language': 'en-US,en;q=0.5',
                 'Upgrade-Insecure-Requests': '1',
                 'Cookie': 'tt_webid_v2=randomid'
-            },
-            'cookiesfrombrowser': ['chrome'],  # Использовать куки из браузера
+            }
         }
         
-        # Обновляем yt-dlp перед использованием
-        os.system('yt-dlp -U')
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
-                # Сначала получаем информацию
+        try:
+            # Сначала получаем информацию
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 if info is None:
                     raise ValueError("Could not extract video info")
@@ -260,9 +259,9 @@ def download_video(self, url: str) -> str:
                         
                 raise FileNotFoundError("Downloaded video file not found")
                 
-            except Exception as e:
-                logger.error(f"Download failed: {str(e)}")
-                raise
+        except Exception as e:
+            logger.error(f"Download failed: {str(e)}")
+            raise
                 
     except Exception as e:
         logger.error(f"Video download error: {str(e)}")
