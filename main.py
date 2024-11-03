@@ -52,11 +52,10 @@ async def process_video(video_request: VideoRequest):
     
     async def run_processing():
     try:
-        result = await asyncio.get_event_loop().run_in_executor(
-            thread_pool,
+        result = await asyncio.to_thread(
             processor.process_video,
-            request.url,
-            request.target_language
+            video_request.url,
+            video_request.target_language
         )
         return result
     except Exception as e:
