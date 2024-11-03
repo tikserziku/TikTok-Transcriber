@@ -1,8 +1,8 @@
+import asyncio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import logging
 from processor import TikTokProcessor
@@ -85,22 +85,26 @@ async def read_root(request: Request):
 async def process_video(request: VideoRequest):
     processor = TikTokProcessor()
     try:
-        # Валидация URL
-        if not request.url:
-            raise ValueError("URL не может быть пустым")
-
         # Проверка языка
         valid_languages = ['en', 'ru', 'lt']
         if request.target_language not in valid_languages:
             raise ValueError("Неподдерживаемый язык")
 
-        # Обработка видео
-        transcript, summary = processor.process_video(request.url, request.target_language)
+        # Устанавливаем таймаут на 5 минут
+        try:
+            response = await asyncio.wait_for(
+                asyncio.to_thread(processor.process_video, request.url, request.target_language),
+                timeout=300
+            )
+            transcript, summary = response
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=408, detail="Превышено время ожидания запроса")
         
         return {
             "transcription": transcript,
             "summary": summary
         }
+        
     except ValueError as ve:
         logger.warning(f"Validation error: {str(ve)}")
         raise HTTPException(status_code=400, detail=str(ve))
