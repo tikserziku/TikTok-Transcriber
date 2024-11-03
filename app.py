@@ -30,20 +30,37 @@ class TikTokTranscriber:
         self.temp_dir = tempfile.mkdtemp()
 
     def download_tiktok(self, url: str) -> str:
-        """Загрузка видео из TikTok"""
+    """Загрузка видео из TikTok с коротким именем файла"""
+    try:
+        # Создаем уникальный короткий ID для файла
+        import uuid
+        file_id = str(uuid.uuid4())[:8]
+        
         ydl_opts = {
             'format': 'best',
-            'outtmpl': os.path.join(self.temp_dir, '%(title)s.%(ext)s'),
+            # Используем короткое имя файла с ID
+            'outtmpl': os.path.join(self.temp_dir, f'tiktok_{file_id}.%(ext)s'),
             'quiet': True,
         }
         
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                return ydl.prepare_filename(info)
-        except Exception as e:
-            logger.error(f"TikTok download error: {e}")
-            raise
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
+            
+            # Проверяем существование файла
+            if os.path.exists(filename):
+                return filename
+            # Если файл имеет расширение .part, пробуем найти настоящий файл
+            base_path = os.path.splitext(filename)[0]
+            for ext in ['.mp4', '.webm', '.mkv']:
+                if os.path.exists(base_path + ext):
+                    return base_path + ext
+                    
+            raise FileNotFoundError("Downloaded file not found")
+            
+    except Exception as e:
+        logger.error(f"TikTok download error: {e}")
+        raise ValueError(f"Failed to download TikTok video: {str(e)}")
 
     def extract_audio(self, video_path: str) -> str:
         """Извлечение аудио из видео"""
