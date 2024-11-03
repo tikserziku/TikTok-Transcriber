@@ -1,5 +1,5 @@
 google-generativeai==0.8.3
-gradio==4.19.2
+gradio==3.35.2
 yt-dlp==2023.12.30
 moviepy==1.0.3
 pydub==0.25.1
