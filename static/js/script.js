@@ -3,13 +3,14 @@ async function processVideo() {
     const lang = document.getElementById('language').value;
 
     if (!url) {
-        alert('Please enter TikTok URL');
+        showAlert('Please enter TikTok URL', 'danger');
         return;
     }
 
-    // Show progress container
+    // Show progress container and reset alerts
     const progressContainer = document.getElementById('progress-container');
     progressContainer.style.display = 'block';
+    hideAlert();
 
     // Progress bar elements
     const downloadProgress = document.getElementById('download-progress');
@@ -20,8 +21,8 @@ async function processVideo() {
     updateProgress(processProgress, 0);
 
     // Clear previous results
-    document.getElementById('transcription').querySelector('.content').innerText = 'Processing...';
-    document.getElementById('summary').querySelector('.content').innerText = 'Processing...';
+    updateContent('transcription', 'Processing...');
+    updateContent('summary', 'Processing...');
 
     try {
         let combinedPercent = 0;
@@ -30,7 +31,7 @@ async function processVideo() {
         const downloadInterval = setInterval(() => {
             if (combinedPercent < 50) {
                 combinedPercent += 1;
-                updateProgress(downloadProgress, combinedPercent); // Update download progress
+                updateProgress(downloadProgress, combinedPercent);
             }
         }, 50);
 
@@ -39,25 +40,22 @@ async function processVideo() {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ url: url, target_language: lang }),
-            timeout: 120000
+            body: JSON.stringify({ url: url, target_language: lang })
         });
 
-        clearInterval(downloadInterval); // Stop download simulation
-        updateProgress(downloadProgress, 100);  // Set download progress to 100%
+        clearInterval(downloadInterval);
+        updateProgress(downloadProgress, 100);
 
         // --- Processing simulation ---
         let processPercent = 0;
         const processInterval = setInterval(() => {
             if (processPercent < 100) {
                 processPercent += 1;
-                updateProgress(processProgress, processPercent); // Update processing progress
+                updateProgress(processProgress, processPercent);
             } else {
-              clearInterval(processInterval); // Stop processing simulation
-
+                clearInterval(processInterval);
             }
         }, 50);
-
 
         if (!response.ok) {
             const errorData = await response.json();
@@ -67,21 +65,77 @@ async function processVideo() {
         const data = await response.json();
 
         // Update results
-        document.getElementById('transcription').querySelector('.content').innerText = data.transcription;
-        document.getElementById('summary').querySelector('.content').innerText = data.summary;
+        updateContent('transcription', data.transcription);
+        updateContent('summary', data.summary);
 
     } catch (error) {
         console.error('Error details:', error);
-        alert(`Error processing video: ${error.message}`);
-        document.getElementById('transcription').querySelector('.content').innerText = 'Error occurred: ' + error.message;
-        document.getElementById('summary').querySelector('.content').innerText = 'Processing failed. Please try again.';
+        showAlert(`Error processing video: ${error.message}`, 'danger');
+        updateContent('transcription', 'Error occurred: ' + error.message);
+        updateContent('summary', 'Processing failed. Please try again.');
     } finally {
         // Hide progress after a delay
         setTimeout(() => {
             progressContainer.style.display = 'none';
-            updateProgress(downloadProgress, 0); // Reset download progress bar
-            updateProgress(processProgress, 0); // Reset processing progress bar
+            updateProgress(downloadProgress, 0);
+            updateProgress(processProgress, 0);
         }, 2000);
+    }
+}
+
+async function extractAudio() {
+    const url = document.getElementById('tiktokUrl').value;
+    const audioStatus = document.getElementById('audio-status');
+    const extractBtn = document.getElementById('extract-audio-btn');
+    const processingIndicator = extractBtn.querySelector('.processing-indicator');
+
+    if (!url) {
+        showAlert('Please enter TikTok URL', 'danger');
+        return;
+    }
+
+    try {
+        // Update UI for processing state
+        extractBtn.disabled = true;
+        processingIndicator.style.display = 'inline-block';
+        audioStatus.innerText = 'Extracting audio...';
+        hideAlert();
+
+        const response = await fetch('/extract-audio', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                url: url,
+                target_language: document.getElementById('language').value
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to extract audio');
+        }
+
+        const data = await response.json();
+
+        // Create download button
+        const downloadBtn = document.createElement('a');
+        downloadBtn.href = `/download-audio/${data.audio_path}`;
+        downloadBtn.className = 'btn btn-success download-link';
+        downloadBtn.innerText = 'Download Audio';
+        downloadBtn.download = data.audio_path;
+
+        // Update status
+        audioStatus.innerText = '';
+        audioStatus.appendChild(downloadBtn);
+
+    } catch (error) {
+        console.error('Error:', error);
+        showAlert('Failed to extract audio. Please try again.', 'danger');
+        audioStatus.innerText = '';
+    } finally {
+        extractBtn.disabled = false;
+        processingIndicator.style.display = 'none';
     }
 }
 
@@ -91,18 +145,29 @@ function updateProgress(progressBar, percent) {
         progressBar.innerText = `${percent}%`;
     }
 }
+
+function updateContent(elementId, content) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        const contentElement = element.querySelector('.content');
+        if (contentElement) {
+            contentElement.innerText = content;
+        }
+    }
+}
+
 function copyText(elementId) {
-    const element = document.getElementById(elementId); // Get the parent element (transcription or summary)
+    const element = document.getElementById(elementId);
 
     if (!element) {
-        console.error(`Element with id "${elementId}" not found.`);
-        return; // Or show an error message to the user.
+        showAlert(`Element "${elementId}" not found.`, 'danger');
+        return;
     }
 
     const contentElement = element.querySelector('.content');
 
-     if (!contentElement) {
-        console.error(`Content element within "${elementId}" not found.`);
+    if (!contentElement) {
+        showAlert(`Content element within "${elementId}" not found.`, 'danger');
         return;
     }
 
@@ -110,22 +175,51 @@ function copyText(elementId) {
 
     navigator.clipboard.writeText(textToCopy)
         .then(() => {
-            // Show a temporary "Copied!" message
             const btn = element.querySelector('.copy-btn');
             if (btn) {
                 const originalText = btn.innerText;
                 btn.innerText = 'Copied!';
                 setTimeout(() => {
                     btn.innerText = originalText;
-                }, 2000); // Change back after 2 seconds
+                }, 2000);
             }
-
-
         })
         .catch(err => {
-            console.error('Failed to copy: ', err);
-            // Optionally show an error message to the user
-            alert("Could not copy text. Please try manually selecting and copying.");
-
+            console.error('Failed to copy:', err);
+            showAlert("Could not copy text. Please try manually selecting and copying.", 'danger');
         });
 }
+
+function showAlert(message, type = 'danger') {
+    const alertBox = document.querySelector('.alert');
+    if (alertBox) {
+        alertBox.innerText = message;
+        alertBox.className = `alert alert-${type}`;
+        alertBox.style.display = 'block';
+    }
+}
+
+function hideAlert() {
+    const alertBox = document.querySelector('.alert');
+    if (alertBox) {
+        alertBox.style.display = 'none';
+    }
+}
+
+// Optional: Add event listeners for keyboard shortcuts
+document.addEventListener('DOMContentLoaded', () => {
+    // Process video on Enter key in URL input
+    document.getElementById('tiktokUrl').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            processVideo();
+        }
+    });
+
+    // Handle paste events to clean URLs
+    document.getElementById('tiktokUrl').addEventListener('paste', (e) => {
+        e.preventDefault();
+        const text = e.clipboardData.getData('text');
+        const cleanUrl = text.trim(); // You can add more URL cleaning logic here
+        e.target.value = cleanUrl;
+    });
+});
