@@ -6,8 +6,10 @@ import time
 from typing import Optional
 from pathlib import Path
 import logging
-from .long_processor import LongVideoProcessor
+
+# Обновляем импорты
 from .processor import TikTokProcessor
+from .long_processor import LongVideoProcessor
 
 logger = logging.getLogger(__name__)
 
