@@ -195,27 +195,53 @@ async def extract_audio_endpoint(video_request: VideoRequest):
     processor = TikTokProcessor()
     
     try:
-        video_path = await asyncio.to_thread(processor.download_video, video_request.url)
-        audio_path = await asyncio.to_thread(processor.extract_audio, video_path)
+        logger.info(f"Starting audio extraction for URL: {video_request.url}")
         
-        if is_shutting_down:
-            raise HTTPException(status_code=503, detail="Service is shutting down")
-            
+        # Создаем временную директорию если её нет
+        TEMP_DIR.mkdir(exist_ok=True)
+        
+        video_path = await asyncio.to_thread(
+            processor.download_video, 
+            video_request.url
+        )
+        logger.info(f"Video downloaded: {video_path}")
+        
+        audio_path = await asyncio.to_thread(
+            processor.extract_audio,
+            video_path
+        )
+        logger.info(f"Audio extracted: {audio_path}")
+        
+        # Генерируем уникальное имя файла
         timestamp = int(time.time())
         filename = f"audio_{timestamp}.mp3"
         final_audio_path = TEMP_DIR / filename
-        shutil.copy2(audio_path, final_audio_path)
         
-        return {"audio_path": filename}
+        # Копируем файл с обработкой ошибок
+        try:
+            shutil.copy2(audio_path, final_audio_path)
+            logger.info(f"Audio file copied to: {final_audio_path}")
+        except Exception as e:
+            logger.error(f"Error copying audio file: {e}")
+            raise HTTPException(
+                status_code=500, 
+                detail="Failed to save audio file"
+            )
         
+        return {
+            "audio_path": filename,
+            "size_mb": os.path.getsize(final_audio_path) / (1024*1024),
+            "status": "success"
+        }
+        
+    except ValueError as e:
+        logger.error(f"Validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Audio extraction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        if not is_shutting_down:
-            await cleanup_old_files()
         processor.cleanup()
-
 @app.get("/download-audio/{filename}")
 async def download_audio(filename: str):
     if is_shutting_down:
