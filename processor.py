@@ -12,23 +12,24 @@ import re
 
 logger = logging.getLogger(__name__)
 
+
 class RetryStrategy:
-    def __init__(self, max_attempts=3, delay=1):
+    def __init__(self, max_attempts=3, delay=1, allowed_exceptions=None):
         self.max_attempts = max_attempts
         self.delay = delay
+        self.allowed_exceptions = allowed_exceptions or (Exception,)
 
     def execute(self, func, *args, **kwargs):
-        last_exception = None
         for attempt in range(self.max_attempts):
             try:
                 return func(*args, **kwargs)
-            except Exception as e:
-                last_exception = e
+            except self.allowed_exceptions as e:
                 logger.warning(f"Attempt {attempt + 1} failed: {e}")
                 if attempt < self.max_attempts - 1:
                     time.sleep(self.delay)
-        if last_exception:
-            raise last_exception
+                else:
+                    raise
+
 
 class TikTokProcessor:
     def __init__(self):
@@ -38,15 +39,21 @@ class TikTokProcessor:
 
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-1.5-pro')
-        self.temp_dir = tempfile.mkdtemp()
-        self.retry_strategy = RetryStrategy()
+        self.temp_dir_obj = tempfile.TemporaryDirectory()
+        self.temp_dir = self.temp_dir_obj.name
+        self.retry_strategy = RetryStrategy(
+            allowed_exceptions=(
+                Exception,
+                yt_dlp.utils.DownloadError,
+                genai.errors.ResourceExhaustedError,
+            )
+        )
 
-    def cleanup(self):
+    def __del__(self):
         try:
-            if os.path.exists(self.temp_dir):
-                shutil.rmtree(self.temp_dir)
+            self.temp_dir_obj.cleanup()
         except Exception as e:
-            logger.error(f"Cleanup error: {e}")
+            logger.error(f"Error cleaning up temporary directory: {e}")
 
     def validate_url(self, url: str) -> bool:
         if not url:
@@ -73,59 +80,23 @@ class TikTokProcessor:
             raise ValueError("Invalid TikTok URL format")
 
         def _download():
-            file_id = os.urandom(4).hex()
             ydl_opts = {
-                'format': 'best',
-                'outtmpl': os.path.join(self.temp_dir, f'video_{file_id}.%(ext)s'),
-                'quiet': False,
-                'no_warnings': False,
-                'extract_flat': False,
-                'force_generic_extractor': False,
-                'ignoreerrors': False,
-                'nocheckcertificate': True,
-                'headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.5',
-                    'Upgrade-Insecure-Requests': '1',
-                    'Referer': 'https://www.tiktok.com/'
-                },
-                'socket_timeout': 30,
-                'retries': 10,
+                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                'outtmpl': os.path.join(self.temp_dir, '%(title)s-%(id)s.%(ext)s'),
+                'quiet': True,
+                'no_warnings': True,
+                'noplaylist': True,
             }
-
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    logger.info(f"Attempting to extract video info for URL: {url}")
-                    info = ydl.extract_info(url, download=False)
-
-                    if not info:
-                        raise ValueError("Could not extract video information")
-
-                    logger.info("Video info extracted successfully, starting download")
-                    ydl.download([url])
-
-                    filename = ydl.prepare_filename(info)
-                    logger.info(f"Prepared filename: {filename}")
-
-                    if os.path.exists(filename):
-                        logger.info(f"Video downloaded successfully: {filename}")
-                        return filename
-
-                    base, _ = os.path.splitext(filename)
-                    for ext in ['.mp4', '.webm', '.mkv']:
-                        alt_filename = base + ext
-                        if os.path.exists(alt_filename):
-                            logger.info(f"Found video with alternative extension: {alt_filename}")
-                            return alt_filename
-
-                    raise FileNotFoundError(f"Downloaded file not found: {filename}")
-
-            except yt_dlp.utils.DownloadError as e:
-                logger.error(f"yt-dlp download error: {e}")
-                raise
+                    info = ydl.extract_info(url, download=True)
+                    if 'requested_downloads' in info:
+                        file_info = info['requested_downloads'][0]
+                        return file_info['filepath']
+                    else:
+                        raise ValueError("No video file info found after download.")
             except Exception as e:
-                logger.error(f"Unexpected download error: {e}")
+                logger.error(f"Error during video download with yt-dlp: {e}")
                 raise
 
         return self.retry_strategy.execute(_download)
@@ -144,7 +115,6 @@ class TikTokProcessor:
 
         return self.retry_strategy.execute(_extract)
 
-
     def transcribe_audio(self, audio_path: str) -> str:
         def _transcribe():
             try:
@@ -159,9 +129,18 @@ class TikTokProcessor:
                     }
                 ])
                 return response.text
+            except genai.errors.ResourceExhaustedError as e:
+                if hasattr(e, "retry_after"):
+                    retry_after = e.retry_after.seconds
+                else:
+                    retry_after = 60
+                logger.warning(f"Google API rate limit reached. Retrying after {retry_after} seconds...")
+                time.sleep(retry_after)
+                return _transcribe()
             except Exception as e:
-                logger.error(f"Error transcribing audio: {e}")
+                logger.error(f"Error during transcription: {e}")
                 raise
+
         return self.retry_strategy.execute(_transcribe)
 
     def generate_summary(self, text: str, target_language: str) -> str:
@@ -182,7 +161,7 @@ class TikTokProcessor:
 
         return self.retry_strategy.execute(_summarize)
 
-    def process_video(self, url: str, target_language: str) -> Tuple[str, str]:
+    def process_video(self, url: str, target_language: str) -> Tuple[str, str, str]:
         try:
             video_path = self.download_video(url)
             logger.info(f"Video downloaded: {video_path}")
@@ -196,10 +175,8 @@ class TikTokProcessor:
             summary = self.generate_summary(transcript, target_language)
             logger.info("Summary generated")
 
-            return transcript, summary
+            return transcript, summary, audio_path
 
         except Exception as e:
             logger.error(f"Processing error: {e}")
             raise
-        finally:
-            self.cleanup()
