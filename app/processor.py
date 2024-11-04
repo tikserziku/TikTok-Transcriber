@@ -10,7 +10,88 @@ import google.generativeai as genai
 from moviepy.editor import VideoFileClip
 from pydub import AudioSegment
 import re
+from .api_key_manager import APIKeyManager
 
+class TikTokProcessor:
+    def __init__(self):
+        self.api_key_manager = APIKeyManager()
+        self.temp_dir = tempfile.mkdtemp()
+        self.retry_strategy = RetryStrategy()
+        self.extracted_audio_path = None
+        self._init_gemini()
+
+    def _init_gemini(self):
+        """Инициализация Gemini с текущим API ключом"""
+        api_key = self.api_key_manager.get_next_key()
+        if not api_key:
+            raise ValueError("No available API keys")
+            
+        genai.configure(api_key=api_key)
+        self.current_api_key = api_key
+        self.model = genai.GenerativeModel('gemini-1.5-pro')
+
+    async def _process_with_retry(self, func, *args, **kwargs):
+        """Обработка с автоматической сменой ключа при ошибках"""
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                error_message = str(e)
+                self.api_key_manager.mark_key_error(self.current_api_key, error_message)
+                
+                if attempt < max_attempts - 1:
+                    # Пробуем с новым ключом
+                    new_key = self.api_key_manager.get_next_key()
+                    if new_key:
+                        self.current_api_key = new_key
+                        genai.configure(api_key=new_key)
+                        self.model = genai.GenerativeModel('gemini-1.5-pro')
+                        continue
+                raise
+
+    async def transcribe_audio(self, audio_path: str) -> Optional[str]:
+        """Транскрибация с автоматической сменой ключа при необходимости"""
+        async def _transcribe():
+            try:
+                with open(audio_path, 'rb') as f:
+                    audio_data = f.read()
+
+                response = await asyncio.to_thread(
+                    self.model.generate_content,
+                    [
+                        "Transcribe this audio accurately, preserving all details and context.",
+                        {
+                            "mime_type": "audio/mp3",
+                            "data": audio_data
+                        }
+                    ]
+                )
+                return response.text
+            except Exception as e:
+                logger.error(f"Transcription error: {e}")
+                raise
+
+        return await self._process_with_retry(_transcribe)
+
+    # Аналогично обновляем generate_summary:
+    async def generate_summary(self, text: str, target_language: str) -> str:
+        async def _summarize():
+            language_prompts = {
+                'en': 'Generate a comprehensive summary in English:',
+                'ru': 'Составьте подробное резюме на русском языке:',
+                'lt': 'Sukurkite išsamią santrauką lietuvių kalba:'
+            }
+
+            prompt = f"{language_prompts.get(target_language, language_prompts['en'])} {text}"
+            
+            response = await asyncio.to_thread(
+                self.model.generate_content,
+                prompt
+            )
+            return response.text
+
+        return await self._process_with_retry(_summarize)
 # Настройка логирования
 logger = logging.getLogger(__name__)
 
