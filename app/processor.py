@@ -3,6 +3,7 @@ import tempfile
 import logging
 import shutil
 import time
+import asyncio
 from typing import Tuple, Optional
 from datetime import datetime
 import yt_dlp
@@ -12,86 +13,6 @@ from pydub import AudioSegment
 import re
 from .api_key_manager import APIKeyManager
 
-class TikTokProcessor:
-    def __init__(self):
-        self.api_key_manager = APIKeyManager()
-        self.temp_dir = tempfile.mkdtemp()
-        self.retry_strategy = RetryStrategy()
-        self.extracted_audio_path = None
-        self._init_gemini()
-
-    def _init_gemini(self):
-        """Инициализация Gemini с текущим API ключом"""
-        api_key = self.api_key_manager.get_next_key()
-        if not api_key:
-            raise ValueError("No available API keys")
-            
-        genai.configure(api_key=api_key)
-        self.current_api_key = api_key
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
-
-    async def _process_with_retry(self, func, *args, **kwargs):
-        """Обработка с автоматической сменой ключа при ошибках"""
-        max_attempts = 3
-        for attempt in range(max_attempts):
-            try:
-                return await func(*args, **kwargs)
-            except Exception as e:
-                error_message = str(e)
-                self.api_key_manager.mark_key_error(self.current_api_key, error_message)
-                
-                if attempt < max_attempts - 1:
-                    # Пробуем с новым ключом
-                    new_key = self.api_key_manager.get_next_key()
-                    if new_key:
-                        self.current_api_key = new_key
-                        genai.configure(api_key=new_key)
-                        self.model = genai.GenerativeModel('gemini-1.5-pro')
-                        continue
-                raise
-
-    async def transcribe_audio(self, audio_path: str) -> Optional[str]:
-        """Транскрибация с автоматической сменой ключа при необходимости"""
-        async def _transcribe():
-            try:
-                with open(audio_path, 'rb') as f:
-                    audio_data = f.read()
-
-                response = await asyncio.to_thread(
-                    self.model.generate_content,
-                    [
-                        "Transcribe this audio accurately, preserving all details and context.",
-                        {
-                            "mime_type": "audio/mp3",
-                            "data": audio_data
-                        }
-                    ]
-                )
-                return response.text
-            except Exception as e:
-                logger.error(f"Transcription error: {e}")
-                raise
-
-        return await self._process_with_retry(_transcribe)
-
-    # Аналогично обновляем generate_summary:
-    async def generate_summary(self, text: str, target_language: str) -> str:
-        async def _summarize():
-            language_prompts = {
-                'en': 'Generate a comprehensive summary in English:',
-                'ru': 'Составьте подробное резюме на русском языке:',
-                'lt': 'Sukurkite išsamią santrauką lietuvių kalba:'
-            }
-
-            prompt = f"{language_prompts.get(target_language, language_prompts['en'])} {text}"
-            
-            response = await asyncio.to_thread(
-                self.model.generate_content,
-                prompt
-            )
-            return response.text
-
-        return await self._process_with_retry(_summarize)
 # Настройка логирования
 logger = logging.getLogger(__name__)
 
@@ -115,15 +36,21 @@ class RetryStrategy:
 
 class TikTokProcessor:
     def __init__(self):
-        api_key = os.getenv('GOOGLE_API_KEY')
-        if not api_key:
-            raise ValueError("Google API key not found")
-
-        genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-1.5-pro')
+        self.api_key_manager = APIKeyManager()
         self.temp_dir = tempfile.mkdtemp()
         self.retry_strategy = RetryStrategy()
         self.extracted_audio_path = None
+        self._init_gemini()
+
+    def _init_gemini(self):
+        """Инициализация Gemini с текущим API ключом"""
+        api_key = self.api_key_manager.get_next_key()
+        if not api_key:
+            raise ValueError("No available API keys")
+            
+        genai.configure(api_key=api_key)
+        self.current_api_key = api_key
+        self.model = genai.GenerativeModel('gemini-1.5-pro')
 
     def cleanup(self):
         try:
@@ -258,27 +185,39 @@ class TikTokProcessor:
     def get_extracted_audio_path(self) -> Optional[str]:
         return self.extracted_audio_path
 
-    def transcribe_audio(self, audio_path: str) -> Optional[str]:
-        def _transcribe():
+    async def transcribe_audio(self, audio_path: str) -> Optional[str]:
+        async def _transcribe():
             try:
                 with open(audio_path, 'rb') as f:
                     audio_data = f.read()
 
-                response = self.model.generate_content([
-                    "Transcribe this audio accurately, preserving all details and context.",
-                    {
-                        "mime_type": "audio/mp3",
-                        "data": audio_data
-                    }
-                ])
+                response = await asyncio.to_thread(
+                    self.model.generate_content,
+                    [
+                        "Transcribe this audio accurately, preserving all details and context.",
+                        {
+                            "mime_type": "audio/mp3",
+                            "data": audio_data
+                        }
+                    ]
+                )
                 return response.text
             except Exception as e:
-                logger.error(f"Error transcribing audio: {e}")
+                logger.error(f"Transcription error: {e}")
+                # Пробуем с новым ключом при ошибке
+                self.api_key_manager.mark_key_error(self.current_api_key, str(e))
+                new_key = self.api_key_manager.get_next_key()
+                if new_key:
+                    self.current_api_key = new_key
+                    genai.configure(api_key=new_key)
+                    self.model = genai.GenerativeModel('gemini-1.5-pro')
+                    return await _transcribe()
                 return None
-        return self.retry_strategy.execute(_transcribe)
 
-    def generate_summary(self, text: str, target_language: str) -> str:
-        def _summarize():
+        return await self._process_with_retry(_transcribe)
+
+    async def generate_summary(self, text: str, target_language: str) -> str:
+        async def _summarize():
             language_prompts = {
                 'en': 'Generate a comprehensive summary in English:',
                 'ru': 'Составьте подробное резюме на русском языке:',
@@ -286,16 +225,21 @@ class TikTokProcessor:
             }
 
             prompt = f"{language_prompts.get(target_language, language_prompts['en'])} {text}"
+            
             try:
-                response = self.model.generate_content(prompt)
+                response = await asyncio.to_thread(
+                    self.model.generate_content,
+                    prompt
+                )
                 return response.text
             except Exception as e:
                 logger.error(f"Error generating summary: {e}")
+                self.api_key_manager.mark_key_error(self.current_api_key, str(e))
                 raise
 
-        return self.retry_strategy.execute(_summarize)
+        return await self._process_with_retry(_summarize)
 
-    def process_video(self, url: str, target_language: str) -> Tuple[str, str, Optional[str]]:
+    async def process_video(self, url: str, target_language: str) -> Tuple[str, str, Optional[str]]:
         """Process video and return transcript, summary and audio path"""
         try:
             video_path = self.download_video(url)
@@ -304,14 +248,14 @@ class TikTokProcessor:
             audio_path = self.extract_audio(video_path)
             logger.info(f"Audio extracted: {audio_path}")
 
-            transcript = self.transcribe_audio(audio_path)
+            transcript = await self.transcribe_audio(audio_path)
             if transcript is None:
                 logger.warning("Transcription failed, but audio was extracted successfully")
                 return "Transcription failed", "Summary not available", audio_path
 
             logger.info("Transcription completed")
 
-            summary = self.generate_summary(transcript, target_language)
+            summary = await self.generate_summary(transcript, target_language)
             logger.info("Summary generated")
 
             return transcript, summary, audio_path
@@ -326,3 +270,22 @@ class TikTokProcessor:
             if self.extracted_audio_path and os.path.exists(self.extracted_audio_path):
                 return "Processing failed", "Processing failed", self.extracted_audio_path
             raise
+
+    async def _process_with_retry(self, func, *args, **kwargs):
+        """Обработка с автоматической сменой ключа при ошибках"""
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                error_message = str(e)
+                self.api_key_manager.mark_key_error(self.current_api_key, error_message)
+                
+                if attempt < max_attempts - 1:
+                    new_key = self.api_key_manager.get_next_key()
+                    if new_key:
+                        self.current_api_key = new_key
+                        genai.configure(api_key=new_key)
+                        self.model = genai.GenerativeModel('gemini-1.5-pro')
+                        continue
+                raise
