@@ -6,8 +6,6 @@ import time
 from typing import Optional
 from pathlib import Path
 import logging
-
-# Обновляем импорты
 from .processor import TikTokProcessor
 from .long_processor import LongVideoProcessor
 
@@ -16,7 +14,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Инициализация процессора при старте
-processor = LongVideoProcessor(api_key=os.getenv('GOOGLE_API_KEY'))
+processor = LongVideoProcessor(temp_dir="/tmp/long_video")
 
 class LongVideoRequest(BaseModel):
     url: str
@@ -87,3 +85,24 @@ async def get_processing_result(request_id: str):
         "chunks_processed": len(status.get("transcripts", [])),
         "status": "completed"
     }
+
+@router.get("/summary/{request_id}")
+async def get_summary(request_id: str, language: str = "en"):
+    """Получение саммари для обработанного видео"""
+    status = processor.get_processing_status(request_id)
+    
+    if status["status"] != "completed":
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot generate summary: video processing not completed"
+        )
+        
+    transcript = status.get("final_transcript")
+    if not transcript:
+        raise HTTPException(
+            status_code=400,
+            detail="No transcript available"
+        )
+        
+    summary = await processor.generate_summary(transcript, language)
+    return {"summary": summary}
