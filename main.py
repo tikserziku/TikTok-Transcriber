@@ -178,7 +178,6 @@ async def process_video(video_request: VideoRequest):
 
 @app.post("/extract-audio")
 async def extract_audio_endpoint(video_request: VideoRequest):
-    """Извлечение аудио из видео"""
     if is_shutting_down:
         return JSONResponse(
             status_code=503,
@@ -188,18 +187,31 @@ async def extract_audio_endpoint(video_request: VideoRequest):
     processor = None
     try:
         processor = TikTokProcessor()
-        video_path = await processor.download_video(video_request.url)
-        audio_path = await processor.extract_audio(video_path)
         
+        # Используем обычную функцию для скачивания, так как она уже реализована синхронно
+        video_path = processor.download_video(video_request.url)
+        logger.info(f"Video downloaded: {video_path}")
+        
+        # Используем обычную функцию для извлечения аудио
+        audio_path = processor.extract_audio(video_path)
+        logger.info(f"Audio extracted: {audio_path}")
+        
+        # Создаем временную директорию если её нет
+        if not TEMP_DIR.exists():
+            TEMP_DIR.mkdir(parents=True)
+        
+        # Копируем файл с уникальным именем
         timestamp = int(time.time())
         filename = f"audio_{timestamp}.mp3"
         final_audio_path = TEMP_DIR / filename
-        
         shutil.copy2(audio_path, final_audio_path)
+        
+        # Получаем размер файла
+        file_size = os.path.getsize(final_audio_path) / (1024 * 1024)  # в МБ
         
         return JSONResponse(content={
             "audio_path": filename,
-            "size_mb": os.path.getsize(final_audio_path) / (1024*1024),
+            "size_mb": file_size,
             "status": "success"
         })
         
