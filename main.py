@@ -14,6 +14,7 @@ from processor import TikTokProcessor
 from concurrent.futures import ThreadPoolExecutor
 import atexit
 import signal
+from long_routes import router as long_video_router
 
 # Настройка логирования
 logging.basicConfig(
@@ -27,11 +28,14 @@ thread_pool = ThreadPoolExecutor(max_workers=3)
 
 app = FastAPI()
 
+# Подключаем роутер для длинных видео
+app.include_router(long_video_router, prefix="/long", tags=["long_videos"])
+
 # Подключаем статические файлы и шаблоны
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# Создаем временную директорию в /tmp для Heroku
+# Создаем временную директорию в /tmp
 TEMP_DIR = Path("/tmp/temp_audio")
 TEMP_DIR.mkdir(exist_ok=True)
 
@@ -102,8 +106,6 @@ async def cleanup_old_files():
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    if is_shutting_down:
-        raise HTTPException(status_code=503, detail="Service is shutting down")
     try:
         return templates.TemplateResponse("index.html", {"request": request})
     except Exception as e:
@@ -114,7 +116,7 @@ async def read_root(request: Request):
 async def process_video(video_request: VideoRequest):
     if is_shutting_down:
         raise HTTPException(status_code=503, detail="Service is shutting down")
-        
+
     processor = TikTokProcessor()
 
     async def run_processing():
@@ -166,7 +168,6 @@ async def process_video(video_request: VideoRequest):
         raise
     except Exception as e:
         logger.error(f"Processing error: {e}")
-        # Пытаемся сохранить аудио даже при ошибке
         audio_path = processor.get_extracted_audio_path()
         if audio_path and os.path.exists(audio_path):
             timestamp = int(time.time())
@@ -192,14 +193,12 @@ async def extract_audio_endpoint(video_request: VideoRequest):
     processor = TikTokProcessor()
     
     try:
-        # Загружаем видео и извлекаем аудио
         video_path = await asyncio.to_thread(processor.download_video, video_request.url)
         audio_path = await asyncio.to_thread(processor.extract_audio, video_path)
         
         if is_shutting_down:
             raise HTTPException(status_code=503, detail="Service is shutting down")
             
-        # Сохраняем аудио файл
         timestamp = int(time.time())
         filename = f"audio_{timestamp}.mp3"
         final_audio_path = TEMP_DIR / filename
