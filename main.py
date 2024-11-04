@@ -4,12 +4,12 @@ import os
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse  # Add StreamingResponse
+from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 
 from processor import TikTokProcessor
 from pydantic import BaseModel
-
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -17,7 +17,11 @@ logger = logging.getLogger(__name__)
 thread_pool = ThreadPoolExecutor(max_workers=3)
 app = FastAPI()
 
+# Mount static files
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# Set up templates
+templates = Jinja2Templates(directory="templates")
 
 
 class VideoRequest(BaseModel):
@@ -37,10 +41,8 @@ async def shutdown_event():
 
 
 @app.get("/", response_class=HTMLResponse)
-async def read_root():
-    with open("static/index.html", "r", encoding="utf-8") as f:
-        html_content = f.read()
-    return HTMLResponse(content=html_content, status_code=200)
+async def read_root(request: Request): # Use request object for template rendering
+    return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.post("/process")
@@ -59,15 +61,14 @@ async def process_video_route(request: Request):
             processor.process_video, url, target_language
         )
 
-        audio_filename = os.path.basename(audio_filepath) # Get filename for download
-
+        audio_filename = os.path.basename(audio_filepath)
 
         return {
             "transcription": transcript,
             "summary": summary,
-            "audio_url": f"/download/{audio_filename}"
+            "audio_url": f"/download/{audio_filename}",
+            "audio_filename": audio_filename # Include filename if needed in frontend.
         }
-
 
     except HTTPException:
         raise
@@ -75,23 +76,21 @@ async def process_video_route(request: Request):
         logger.error(f"Processing error: {e}")
         raise HTTPException(status_code=500, detail=f"Video processing failed: {e}")
     finally:
-        processor.cleanup()  # Cleanup temporary files
-
+        processor.cleanup()
 
 
 @app.get("/download/{filename}")
 async def download_audio(filename: str):
-    audio_filepath = os.path.join(tempfile.gettempdir(), filename)
+    audio_filepath = os.path.join(tempfile.gettempdir(), filename) # Or wherever your audio is stored
     if os.path.exists(audio_filepath):
-
-      def iterfile():  # Generator to stream file chunks
+        def iterfile():
             with open(audio_filepath, mode="rb") as file_like:
                 yield from file_like
 
-      return StreamingResponse(iterfile(), media_type="audio/mpeg", headers={"Content-Disposition": f"attachment; filename={filename}"})
-
+        return StreamingResponse(iterfile(), media_type="audio/mpeg", headers={"Content-Disposition": f"attachment; filename={filename}"})
     else:
         raise HTTPException(status_code=404, detail="Audio file not found")
+
 
 
 if __name__ == "__main__":
