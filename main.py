@@ -10,11 +10,13 @@ from pydantic import BaseModel
 import logging
 import shutil
 import time
-from processor import TikTokProcessor
 from concurrent.futures import ThreadPoolExecutor
 import atexit
 import signal
-from long_routes import router as long_video_router
+
+# Изменяем импорты для работы с модулями приложения
+from app.processor import TikTokProcessor
+from app.long_routes import router as long_video_router
 
 # Настройка логирования
 logging.basicConfig(
