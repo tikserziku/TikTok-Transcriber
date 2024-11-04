@@ -3,7 +3,7 @@ import tempfile
 import logging
 import shutil
 import time
-from typing import Tuple
+from typing import Tuple, Optional
 from datetime import datetime
 import yt_dlp
 import google.generativeai as genai
@@ -40,6 +40,7 @@ class TikTokProcessor:
         self.model = genai.GenerativeModel('gemini-1.5-pro')
         self.temp_dir = tempfile.mkdtemp()
         self.retry_strategy = RetryStrategy()
+        self.extracted_audio_path = None
 
     def cleanup(self):
         try:
@@ -132,11 +133,13 @@ class TikTokProcessor:
 
     def extract_audio(self, video_path: str) -> str:
         def _extract():
-            audio_path = os.path.join(self.temp_dir, 'audio.mp3')
+            timestamp = int(time.time())
+            audio_path = os.path.join(self.temp_dir, f'audio_{timestamp}.mp3')
             try:
                 video = VideoFileClip(video_path)
                 video.audio.write_audiofile(audio_path, codec='mp3', verbose=False)
                 video.close()
+                self.extracted_audio_path = audio_path
                 return audio_path
             except Exception as e:
                 logger.error(f"Error extracting audio: {e}")
@@ -144,8 +147,10 @@ class TikTokProcessor:
 
         return self.retry_strategy.execute(_extract)
 
+    def get_extracted_audio_path(self) -> Optional[str]:
+        return self.extracted_audio_path
 
-    def transcribe_audio(self, audio_path: str) -> str:
+    def transcribe_audio(self, audio_path: str) -> Optional[str]:
         def _transcribe():
             try:
                 with open(audio_path, 'rb') as f:
@@ -161,7 +166,7 @@ class TikTokProcessor:
                 return response.text
             except Exception as e:
                 logger.error(f"Error transcribing audio: {e}")
-                raise
+                return None
         return self.retry_strategy.execute(_transcribe)
 
     def generate_summary(self, text: str, target_language: str) -> str:
@@ -182,7 +187,8 @@ class TikTokProcessor:
 
         return self.retry_strategy.execute(_summarize)
 
-    def process_video(self, url: str, target_language: str) -> Tuple[str, str]:
+    def process_video(self, url: str, target_language: str) -> Tuple[str, str, Optional[str]]:
+        """Process video and return transcript, summary and audio path"""
         try:
             video_path = self.download_video(url)
             logger.info(f"Video downloaded: {video_path}")
@@ -191,15 +197,19 @@ class TikTokProcessor:
             logger.info(f"Audio extracted: {audio_path}")
 
             transcript = self.transcribe_audio(audio_path)
+            if transcript is None:
+                logger.warning("Transcription failed, but audio was extracted successfully")
+                return "Transcription failed", "Summary not available", audio_path
+
             logger.info("Transcription completed")
 
             summary = self.generate_summary(transcript, target_language)
             logger.info("Summary generated")
 
-            return transcript, summary
+            return transcript, summary, audio_path
 
         except Exception as e:
             logger.error(f"Processing error: {e}")
+            if self.extracted_audio_path and os.path.exists(self.extracted_audio_path):
+                return "Processing failed", "Processing failed", self.extracted_audio_path
             raise
-        finally:
-            self.cleanup()
