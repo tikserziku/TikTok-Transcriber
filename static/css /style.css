@@ -1,0 +1,287 @@
+/* Base styles */
+body { 
+    padding: 15px;
+    background-color: #f8f9fa;
+    color: #212529;
+    line-height: 1.5;
+}
+
+/* Card styles */
+.card {
+    border: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    transition: box-shadow 0.3s ease;
+}
+
+.card:hover {
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.card-header {
+    background-color: #fff;
+    border-bottom: 1px solid #eaeaea;
+    padding: 1rem 1.25rem;
+}
+
+.card-header h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    color: #333;
+}
+
+/* Result boxes */
+.result-box {
+    min-height: 150px;
+    margin: 15px 0;
+    padding: 15px;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    background-color: white;
+    position: relative;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    transition: all 0.3s ease;
+}
+
+.result-box:hover {
+    box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+.result-box .content {
+    margin-top: 2.5rem;
+    padding: 10px;
+    min-height: 100px;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+}
+
+/* Copy button */
+.copy-btn {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    transition: all 0.2s ease;
+    z-index: 1;
+}
+
+.copy-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* Progress container and bars */
+.progress-container {
+    margin: 20px 0;
+    display: none;
+    padding: 15px;
+    border-radius: 8px;
+}
+
+.progress {
+    height: 25px;
+    background-color: #e9ecef;
+    margin-bottom: 10px;
+    border-radius: 15px;
+    overflow: hidden;
+}
+
+.progress-bar {
+    transition: width 0.3s ease;
+    background-image: linear-gradient(45deg, 
+        rgba(255,255,255,.15) 25%, 
+        transparent 25%, 
+        transparent 50%, 
+        rgba(255,255,255,.15) 50%, 
+        rgba(255,255,255,.15) 75%, 
+        transparent 75%, 
+        transparent);
+    background-size: 1rem 1rem;
+    animation: progress-bar-stripes 1s linear infinite;
+}
+
+.progress-label {
+    font-size: 14px;
+    color: #6c757d;
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+
+/* Audio download section */
+#audio-download {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+#extract-audio-btn {
+    min-width: 150px;
+    position: relative;
+    padding-right: 2.5rem;
+}
+
+#extract-audio-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.7;
+}
+
+.processing-indicator {
+    position: absolute;
+    right: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    display: none;
+}
+
+#audio-status {
+    width: 100%;
+    min-height: 30px;
+    margin-top: 1rem;
+}
+
+/* Alert styles */
+.alert {
+    display: none;
+    margin-top: 1rem;
+    border-radius: 8px;
+    padding: 1rem;
+    border: 1px solid transparent;
+}
+
+.alert-danger {
+    background-color: #fff2f2;
+    border-color: #ffcdd2;
+    color: #d32f2f;
+}
+
+/* Form controls */
+.form-control,
+.form-select {
+    border: 1px solid #dee2e6;
+    transition: border-color 0.15s ease-in-out, box-shadow 0.15s ease-in-out;
+}
+
+.form-control:focus,
+.form-select:focus {
+    border-color: #86b7fe;
+    box-shadow: 0 0 0 0.25rem rgba(13,110,253,.25);
+}
+
+/* Button styles */
+.btn {
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: 0.3px;
+    transition: all 0.2s ease;
+}
+
+.btn-primary {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+}
+
+.btn-primary:hover {
+    background-color: #0b5ed7;
+    border-color: #0a58ca;
+    transform: translateY(-1px);
+}
+
+.btn-secondary {
+    background-color: #6c757d;
+    border-color: #6c757d;
+}
+
+.btn-secondary:hover {
+    background-color: #5c636a;
+    border-color: #565e64;
+}
+
+/* Download link styles */
+.download-link {
+    display: inline-block;
+    margin-top: 1rem;
+    padding: 0.5rem 1rem;
+    background-color: #28a745;
+    color: white;
+    text-decoration: none;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.download-link:hover {
+    background-color: #218838;
+    transform: translateY(-1px);
+}
+
+/* Animations */
+@keyframes progress-bar-stripes {
+    0% { background-position-x: 1rem; }
+}
+
+/* Media queries */
+@media (max-width: 768px) {
+    body {
+        padding: 10px;
+    }
+    
+    .result-box {
+        min-height: 200px;
+    }
+    
+    .btn {
+        width: 100%;
+        margin: 5px 0;
+    }
+    
+    .form-control, 
+    .form-select {
+        margin-bottom: 10px;
+    }
+    
+    .card-header h3 {
+        font-size: 1.1rem;
+    }
+    
+    .copy-btn {
+        top: 5px;
+        right: 5px;
+    }
+    
+    #extract-audio-btn {
+        width: 100%;
+    }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+    body {
+        background-color: #212529;
+        color: #f8f9fa;
+    }
+    
+    .card,
+    .result-box {
+        background-color: #2b3035;
+        border-color: #495057;
+    }
+    
+    .card-header {
+        background-color: #343a40;
+        border-color: #495057;
+    }
+    
+    .progress {
+        background-color: #343a40;
+    }
+    
+    .form-control,
+    .form-select {
+        background-color: #2b3035;
+        border-color: #495057;
+        color: #f8f9fa;
+    }
+    
+    .form-control:focus,
+    .form-select:focus {
+        background-color: #2b3035;
+        border-color: #0d6efd;
+    }
+}

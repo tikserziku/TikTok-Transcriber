@@ -1,1 +1,1 @@
-web: uvicorn main:app --host=0.0.0.0 --port=${PORT:-8000}
+web: gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --timeout 300 --keep-alive 120 --log-level debug
