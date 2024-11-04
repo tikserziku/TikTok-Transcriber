@@ -7,25 +7,20 @@ async function processVideo() {
         return;
     }
 
-    // Show progress container and reset alerts
     const progressContainer = document.getElementById('progress-container');
     progressContainer.style.display = 'block';
     hideAlert();
 
-    // Progress bar elements
     const downloadProgress = document.getElementById('download-progress');
     const processProgress = document.getElementById('process-progress');
 
-    // Initialize progress bars
     updateProgress(downloadProgress, 0);
     updateProgress(processProgress, 0);
 
-    // Clear previous results
     updateContent('transcription', 'Processing...');
     updateContent('summary', 'Processing...');
 
     try {
-        // --- Download simulation ---
         const downloadInterval = setInterval(() => {
             const percent = parseInt(downloadProgress.style.width) || 0;
             if (percent < 100) {
@@ -47,7 +42,6 @@ async function processVideo() {
         if (!response.ok) {
             const errorData = await response.json();
             
-            // Check if it's a video length error
             if (errorData.detail && errorData.detail.includes("too long")) {
                 const errorMessage = `
                     This video is too long for automatic transcription. 
@@ -67,7 +61,6 @@ async function processVideo() {
 
         const data = await response.json();
 
-        // Show processing progress
         const processInterval = setInterval(() => {
             const percent = parseInt(processProgress.style.width) || 0;
             if (percent < 100) {
@@ -77,11 +70,9 @@ async function processVideo() {
             }
         }, 100);
 
-        // Update results
         updateContent('transcription', data.transcription || 'Transcription failed');
         updateContent('summary', data.summary || 'Summary not available');
 
-        // If audio is available, show download option
         if (data.audio_path) {
             showAudioDownloadOption(data.audio_path);
         }
@@ -119,7 +110,6 @@ async function extractAudio() {
     }
 
     try {
-        // Update UI for processing state
         extractBtn.disabled = true;
         processingIndicator.style.display = 'inline-block';
         audioStatus.innerText = 'Extracting audio...';
@@ -142,17 +132,8 @@ async function extractAudio() {
 
         const data = await response.json();
 
-        // Create download button
-        const downloadBtn = document.createElement('a');
-        downloadBtn.href = `/download-audio/${data.audio_path}`;
-        downloadBtn.className = 'btn btn-success download-link';
-        downloadBtn.innerText = 'Download Audio';
-        downloadBtn.download = data.audio_path;
-
-        // Clear previous content
         audioStatus.innerText = '';
         
-        // Add file info if available
         if (data.size_mb) {
             const fileInfo = document.createElement('div');
             fileInfo.className = 'text-muted mb-2';
@@ -160,10 +141,13 @@ async function extractAudio() {
             audioStatus.appendChild(fileInfo);
         }
 
-        // Add download button
+        const downloadBtn = document.createElement('a');
+        downloadBtn.href = `/download-audio/${data.audio_path}`;
+        downloadBtn.className = 'btn btn-success download-link';
+        downloadBtn.innerText = 'Download Audio';
+        downloadBtn.download = data.audio_path;
         audioStatus.appendChild(downloadBtn);
 
-        // Add usage instructions
         const instructions = document.createElement('div');
         instructions.className = 'alert alert-info mt-3';
         instructions.innerHTML = `
@@ -190,59 +174,18 @@ function updateProgress(progressBar, percent) {
     if (progressBar) {
         progressBar.style.width = `${percent}%`;
         progressBar.innerText = `${percent}%`;
-    }
-}
-
-function updateContent(elementId, content) {
-    const element = document.getElementById(elementId);
-    if (element) {
-        const contentElement = element.querySelector('.content');
-        if (contentElement) {
-            contentElement.innerText = content;
-        }
-    }
-}
-
-function showAudioExtractionOption() {
-    const audioSection = document.getElementById('audio-download');
-    if (audioSection) {
-        audioSection.style.display = 'block';
-        const notice = document.createElement('div');
-        notice.className = 'alert alert-info mt-3';
-        notice.innerHTML = `
-            You can use the extracted audio file with:
-            <ul>
-                <li><a href="https://notebooklm.google.com/" target="_blank">NotebookLM</a></li>
-                <li>Other transcription services</li>
-                <li>Local speech-to-text tools</li>
-            </ul>
-        `;
-        audioSection.appendChild(notice);
-    }
-}
-
-function showAudioDownloadOption(audioPath) {
-    const audioSection = document.getElementById('audio-download');
-    if (audioSection) {
-        const downloadLink = document.createElement('a');
-        downloadLink.href = `/download-audio/${audioPath}`;
-        downloadLink.className = 'btn btn-success mt-2';
-        downloadLink.innerText = 'Download Audio File';
-        downloadLink.download = audioPath;
-        audioSection.appendChild(downloadLink);
+        progressBar.setAttribute('aria-valuenow', percent);
     }
 }
 
 function copyText(elementId) {
     const element = document.getElementById(elementId);
-
     if (!element) {
         showAlert(`Element "${elementId}" not found.`, 'danger');
         return;
     }
 
     const contentElement = element.querySelector('.content');
-
     if (!contentElement) {
         showAlert(`Content element within "${elementId}" not found.`, 'danger');
         return;
@@ -255,16 +198,44 @@ function copyText(elementId) {
             const btn = element.querySelector('.copy-btn');
             if (btn) {
                 const originalText = btn.innerText;
-                btn.innerText = 'Copied!';
+                btn.innerHTML = `
+                    Copied! 
+                    <span class="small d-block">
+                        Open NotebookLM to paste
+                    </span>
+                `;
+                
+                const nlmBtn = document.createElement('a');
+                nlmBtn.href = 'https://notebooklm.google.com/';
+                nlmBtn.target = '_blank';
+                nlmBtn.rel = 'noopener noreferrer';
+                nlmBtn.className = 'btn btn-sm btn-primary mt-2';
+                nlmBtn.innerHTML = 'Open NotebookLM';
+                
+                btn.parentElement.appendChild(nlmBtn);
+                
                 setTimeout(() => {
                     btn.innerText = originalText;
-                }, 2000);
+                    if (nlmBtn.parentElement) {
+                        nlmBtn.parentElement.removeChild(nlmBtn);
+                    }
+                }, 3000);
             }
         })
         .catch(err => {
             console.error('Failed to copy:', err);
             showAlert("Could not copy text. Please try manually selecting and copying.", 'danger');
         });
+}
+
+function updateContent(elementId, content) {
+    const element = document.getElementById(elementId);
+    if (element) {
+        const contentElement = element.querySelector('.content');
+        if (contentElement) {
+            contentElement.innerText = content;
+        }
+    }
 }
 
 function showAlert(message, type = 'danger') {
@@ -283,16 +254,13 @@ function hideAlert() {
     }
 }
 
-// Event listeners
 document.addEventListener('DOMContentLoaded', () => {
-    // Process video on Enter key in URL input
     document.getElementById('tiktokUrl').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
             processVideo();
         }
     });
 
-    // Handle paste events to clean URLs
     document.getElementById('tiktokUrl').addEventListener('paste', (e) => {
         e.preventDefault();
         const text = e.clipboardData.getData('text');
