@@ -8,8 +8,10 @@ from datetime import datetime
 import yt_dlp
 import google.generativeai as genai
 from moviepy.editor import VideoFileClip
+from pydub import AudioSegment
 import re
 
+# Настройка логирования
 logger = logging.getLogger(__name__)
 
 class RetryStrategy:
@@ -136,13 +138,38 @@ class TikTokProcessor:
             timestamp = int(time.time())
             audio_path = os.path.join(self.temp_dir, f'audio_{timestamp}.mp3')
             try:
+                # Проверяем размер видео файла
+                video_size = os.path.getsize(video_path)
+                logger.info(f"Video file size: {video_size / (1024*1024):.2f} MB")
+
                 video = VideoFileClip(video_path)
-                video.audio.write_audiofile(audio_path, codec='mp3', verbose=False)
+                
+                # Проверяем длительность
+                duration = video.duration
+                logger.info(f"Video duration: {duration:.2f} seconds")
+                
+                if duration > 300:  # 5 минут
+                    raise ValueError(
+                        "This video is too long for automatic transcription. "
+                        "Please use the extracted audio file with NotebookLM or another transcription service."
+                    )
+
+                video.audio.write_audiofile(
+                    audio_path,
+                    codec='mp3',
+                    bitrate='128k',
+                    verbose=False
+                )
                 video.close()
+
                 self.extracted_audio_path = audio_path
+                logger.info(f"Audio extracted successfully: {audio_path}")
                 return audio_path
+
             except Exception as e:
                 logger.error(f"Error extracting audio: {e}")
+                if 'video' in locals():
+                    video.close()
                 raise
 
         return self.retry_strategy.execute(_extract)
@@ -208,6 +235,11 @@ class TikTokProcessor:
 
             return transcript, summary, audio_path
 
+        except ValueError as e:
+            # Специальная обработка для длинных видео
+            if "too long" in str(e) and self.extracted_audio_path:
+                return str(e), "Video too long for transcription", self.extracted_audio_path
+            raise
         except Exception as e:
             logger.error(f"Processing error: {e}")
             if self.extracted_audio_path and os.path.exists(self.extracted_audio_path):
