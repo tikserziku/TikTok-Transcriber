@@ -16,6 +16,10 @@ from pydantic import BaseModel
 from moviepy.editor import VideoFileClip
 from pydub import AudioSegment
 from langdetect import detect
+from .long_routes import router as long_video_router
+
+# В существующий код добавьте:
+app.include_router(long_video_router, prefix="/long", tags=["long_videos"])
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
