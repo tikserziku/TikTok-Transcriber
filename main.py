@@ -20,8 +20,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация ThreadPool для асинхронных операций
-thread_pool = ThreadPoolExecutor(max_workers=3)
+# Инициализация ThreadPool с меньшим количеством workers для Heroku
+thread_pool = ThreadPoolExecutor(max_workers=2)
 
 app = FastAPI()
 
@@ -29,38 +29,61 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
+# Создаем временную директорию в /tmp для Heroku
+TEMP_DIR = Path("/tmp/temp_audio")
+TEMP_DIR.mkdir(exist_ok=True)
 
 class VideoRequest(BaseModel):
     url: str
     target_language: str
 
-
 @app.on_event("startup")
 async def startup_event():
     logger.info("Application starting up...")
-    # Создаем директорию для аудио файлов при запуске
-    Path("temp_audio").mkdir(exist_ok=True)
-
+    # Очищаем временную директорию при старте
+    try:
+        if TEMP_DIR.exists():
+            shutil.rmtree(TEMP_DIR)
+        TEMP_DIR.mkdir(exist_ok=True)
+    except Exception as e:
+        logger.error(f"Error cleaning temp directory on startup: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Application shutting down...")
-    thread_pool.shutdown(wait=False)
-    # Очищаем временную директорию при выключении
+    # Gracefully закрываем thread pool
+    thread_pool.shutdown(wait=True, cancel_futures=True)
+    # Очищаем временную директорию
     try:
-        shutil.rmtree("temp_audio")
+        if TEMP_DIR.exists():
+            shutil.rmtree(TEMP_DIR)
     except Exception as e:
-        logger.error(f"Error cleaning temp directory: {e}")
+        logger.error(f"Error cleaning temp directory on shutdown: {e}")
 
+async def cleanup_old_files():
+    """Очистка старых файлов"""
+    try:
+        current_time = time.time()
+        for file_path in TEMP_DIR.glob("*.mp3"):
+            try:
+                file_age = current_time - file_path.stat().st_mtime
+                # Удаляем файлы старше 15 минут
+                if file_age > 900:
+                    file_path.unlink()
+                    logger.info(f"Removed old file: {file_path}")
+            except Exception as e:
+                logger.error(f"Error removing file {file_path}: {e}")
+    except Exception as e:
+        logger.error(f"Error in cleanup: {e}")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
     try:
+        await cleanup_old_files()  # Очищаем старые файлы при каждом запросе
         return templates.TemplateResponse("index.html", {"request": request})
     except Exception as e:
         logger.error(f"Error rendering index page: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
-
 
 @app.post("/process")
 async def process_video(video_request: VideoRequest):
@@ -74,12 +97,11 @@ async def process_video(video_request: VideoRequest):
                 video_request.target_language
             )
             
-            # Сохраняем аудио файл если он есть
             audio_filename = None
             if audio_path and os.path.exists(audio_path):
                 timestamp = int(time.time())
                 filename = f"audio_{timestamp}.mp3"
-                final_audio_path = Path("temp_audio") / filename
+                final_audio_path = TEMP_DIR / filename
                 shutil.copy2(audio_path, final_audio_path)
                 audio_filename = filename
                 
@@ -90,16 +112,15 @@ async def process_video(video_request: VideoRequest):
             raise
 
     try:
-        # Проверка языка
-        valid_languages = ['en', 'ru', 'lt']
-        if video_request.target_language not in valid_languages:
+        await cleanup_old_files()  # Очищаем старые файлы перед обработкой
+
+        if video_request.target_language not in ['en', 'ru', 'lt']:
             raise HTTPException(status_code=400, detail="Unsupported language")
 
-        # Обработка с таймаутом
         try:
             transcript, summary, audio_filename = await asyncio.wait_for(
                 run_processing(),
-                timeout=300
+                timeout=25  # Уменьшаем таймаут для Heroku
             )
         except asyncio.TimeoutError:
             raise HTTPException(status_code=408, detail="Request Timeout")
@@ -118,12 +139,11 @@ async def process_video(video_request: VideoRequest):
         raise
     except Exception as e:
         logger.error(f"Processing error: {e}")
-        # Проверяем, есть ли доступный аудио файл даже при ошибке
         audio_path = processor.get_extracted_audio_path()
         if audio_path and os.path.exists(audio_path):
             timestamp = int(time.time())
             filename = f"audio_{timestamp}.mp3"
-            final_audio_path = Path("temp_audio") / filename
+            final_audio_path = TEMP_DIR / filename
             shutil.copy2(audio_path, final_audio_path)
             return {
                 "transcription": "Processing failed",
@@ -134,35 +154,44 @@ async def process_video(video_request: VideoRequest):
     finally:
         processor.cleanup()
 
-
 @app.post("/extract-audio")
 async def extract_audio_endpoint(video_request: VideoRequest):
     processor = TikTokProcessor()
     
     try:
-        # Загружаем видео и извлекаем аудио
-        video_path = await asyncio.to_thread(processor.download_video, video_request.url)
-        audio_path = await asyncio.to_thread(processor.extract_audio, video_path)
+        await cleanup_old_files()
+
+        video_path = await asyncio.wait_for(
+            asyncio.to_thread(processor.download_video, video_request.url),
+            timeout=15
+        )
         
-        # Сохраняем аудио файл во временную директорию
+        audio_path = await asyncio.wait_for(
+            asyncio.to_thread(processor.extract_audio, video_path),
+            timeout=10
+        )
+        
         timestamp = int(time.time())
         filename = f"audio_{timestamp}.mp3"
-        final_audio_path = Path("temp_audio") / filename
+        final_audio_path = TEMP_DIR / filename
         shutil.copy2(audio_path, final_audio_path)
         
         return {"audio_path": filename}
         
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail="Request Timeout")
     except Exception as e:
         logger.error(f"Audio extraction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         processor.cleanup()
 
-
 @app.get("/download-audio/{filename}")
 async def download_audio(filename: str):
     try:
-        file_path = Path("temp_audio") / filename
+        await cleanup_old_files()
+        
+        file_path = TEMP_DIR / filename
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="Audio file not found")
             
@@ -177,37 +206,13 @@ async def download_audio(filename: str):
         logger.error(f"Download error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@app.on_event("startup")
-async def cleanup_old_files():
-    """Периодически очищает старые временные файлы"""
-    while True:
-        try:
-            temp_dir = Path("temp_audio")
-            current_time = time.time()
-            
-            for file_path in temp_dir.glob("*.mp3"):
-                file_age = current_time - os.path.getctime(file_path)
-                # Удаляем файлы старше 1 часа
-                if file_age > 3600:
-                    try:
-                        os.unlink(file_path)
-                        logger.info(f"Removed old file: {file_path}")
-                    except Exception as e:
-                        logger.error(f"Error removing old file {file_path}: {e}")
-                        
-        except Exception as e:
-            logger.error(f"Error in cleanup task: {e}")
-            
-        await asyncio.sleep(3600)  # Проверяем каждый час
-
-
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
-        app,
+        "main:app",
         host="0.0.0.0",
         port=port,
+        workers=1,  # Используем только один worker для Heroku
         log_level="info"
     )
