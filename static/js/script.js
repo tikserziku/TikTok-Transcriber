@@ -21,10 +21,12 @@ async function processVideo() {
     updateContent('summary', 'Processing...');
 
     try {
+        // Download - 30%
+        let downloadPercent = 0;
         const downloadInterval = setInterval(() => {
-            const percent = parseInt(downloadProgress.style.width) || 0;
-            if (percent < 100) {
-                updateProgress(downloadProgress, Math.min(percent + 2, 100));
+            if (downloadPercent < 30) {
+                downloadPercent += 1;
+                updateProgress(downloadProgress, downloadPercent);
             }
         }, 100);
 
@@ -41,7 +43,6 @@ async function processVideo() {
 
         if (!response.ok) {
             const errorData = await response.json();
-            
             if (errorData.detail && errorData.detail.includes("too long")) {
                 const errorMessage = `
                     This video is too long for automatic transcription. 
@@ -55,30 +56,46 @@ async function processVideo() {
                 showAudioExtractionOption();
                 return;
             }
-            
             throw new Error(errorData.detail || 'Network response was not ok');
         }
 
-        const data = await response.json();
-
+        // Processing progress simulation based on typical timings
+        let processPercent = 0;
         const processInterval = setInterval(() => {
-            const percent = parseInt(processProgress.style.width) || 0;
-            if (percent < 100) {
-                updateProgress(processProgress, Math.min(percent + 2, 100));
-            } else {
+            // Audio extraction: 0-30%
+            if (processPercent < 30) {
+                processPercent += 2;
+            } 
+            // Transcription: 30-70%
+            else if (processPercent < 70) {
+                processPercent += 1;
+            }
+            // Summary generation: 70-100%
+            else if (processPercent < 100) {
+                processPercent += 0.5;
+            }
+            
+            updateProgress(processProgress, Math.min(processPercent, 100));
+            
+            if (processPercent >= 100) {
                 clearInterval(processInterval);
             }
-        }, 100);
+        }, 200);
 
+        const data = await response.json();
+
+        // Clear any remaining intervals
+        clearInterval(processInterval);
+        updateProgress(processProgress, 100);
+
+        // Update results
         updateContent('transcription', data.transcription || 'Transcription failed');
         updateContent('summary', data.summary || 'Summary not available');
 
+        // Show audio download if available
         if (data.audio_path) {
             showAudioDownloadOption(data.audio_path);
         }
-
-        clearInterval(processInterval);
-        updateProgress(processProgress, 100);
 
     } catch (error) {
         console.error('Error details:', error);
@@ -90,6 +107,7 @@ async function processVideo() {
         updateContent('transcription', errorMessage);
         updateContent('summary', 'Processing failed. Please try again.');
     } finally {
+        // Hide progress after delay
         setTimeout(() => {
             progressContainer.style.display = 'none';
             updateProgress(downloadProgress, 0);
