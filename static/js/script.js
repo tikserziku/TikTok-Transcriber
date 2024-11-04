@@ -7,57 +7,49 @@ async function processVideo() {
         return;
     }
 
-    // Show progress container
+    // Show progress
     const progressContainer = document.getElementById('progress-container');
     progressContainer.style.display = 'block';
-
-    // Progress bar elements
     const downloadProgress = document.getElementById('download-progress');
     const processProgress = document.getElementById('process-progress');
-
-    // Initialize progress bars
     updateProgress(downloadProgress, 0);
     updateProgress(processProgress, 0);
 
     // Clear previous results
     document.getElementById('transcription').querySelector('.content').innerText = 'Processing...';
     document.getElementById('summary').querySelector('.content').innerText = 'Processing...';
+    const downloadLinkContainer = document.getElementById('download-link'); // Get download link container
+    downloadLinkContainer.innerHTML = ''; // Clear previous download link
 
     try {
-        let combinedPercent = 0;
+        let downloadPercent = 0;
+        let processPercent = 0;
 
-        // --- Download simulation ---
         const downloadInterval = setInterval(() => {
-            if (combinedPercent < 50) {
-                combinedPercent += 1;
-                updateProgress(downloadProgress, combinedPercent); // Update download progress
+            if (downloadPercent < 50) {
+                downloadPercent += 1;
+                updateProgress(downloadProgress, downloadPercent);
             }
         }, 50);
 
         const response = await fetch('/process', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: url, target_language: lang }),
             timeout: 120000
         });
 
-        clearInterval(downloadInterval); // Stop download simulation
-        updateProgress(downloadProgress, 100);  // Set download progress to 100%
+        clearInterval(downloadInterval);
+        updateProgress(downloadProgress, 100);
 
-        // --- Processing simulation ---
-        let processPercent = 0;
         const processInterval = setInterval(() => {
             if (processPercent < 100) {
                 processPercent += 1;
-                updateProgress(processProgress, processPercent); // Update processing progress
+                updateProgress(processProgress, processPercent);
             } else {
-              clearInterval(processInterval); // Stop processing simulation
-
+                clearInterval(processInterval);
             }
         }, 50);
-
 
         if (!response.ok) {
             const errorData = await response.json();
@@ -66,9 +58,21 @@ async function processVideo() {
 
         const data = await response.json();
 
-        // Update results
         document.getElementById('transcription').querySelector('.content').innerText = data.transcription;
         document.getElementById('summary').querySelector('.content').innerText = data.summary;
+
+
+         // Add download link if audio_url is present
+        if (data.audio_url) {
+            const downloadLink = document.createElement('a');
+            downloadLink.href = data.audio_url;
+            downloadLink.className = 'btn btn-success'; // Add Bootstrap button class
+            downloadLink.download = 'audio.mp3'; // Suggest filename for download.  You might want to make this dynamic based on the video title.
+            downloadLink.innerText = 'Download MP3';
+            downloadLinkContainer.appendChild(downloadLink);
+
+        }
+
 
     } catch (error) {
         console.error('Error details:', error);
@@ -76,11 +80,10 @@ async function processVideo() {
         document.getElementById('transcription').querySelector('.content').innerText = 'Error occurred: ' + error.message;
         document.getElementById('summary').querySelector('.content').innerText = 'Processing failed. Please try again.';
     } finally {
-        // Hide progress after a delay
         setTimeout(() => {
             progressContainer.style.display = 'none';
-            updateProgress(downloadProgress, 0); // Reset download progress bar
-            updateProgress(processProgress, 0); // Reset processing progress bar
+            updateProgress(downloadProgress, 0);
+            updateProgress(processProgress, 0);
         }, 2000);
     }
 }
