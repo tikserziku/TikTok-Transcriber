@@ -1,4 +1,4 @@
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import os
 from pathlib import Path
 import asyncio
@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import logging
 import shutil
@@ -22,21 +23,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация приложения и компонентов
+# Инициализация приложения
 app = FastAPI()
+
+# Добавляем CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Инициализация компонентов
 thread_pool = ThreadPoolExecutor(max_workers=3)
 
 # Настройка статических файлов и шаблонов
-static_path = Path(__file__).parent / "static"
-if not static_path.exists():
-    static_path.mkdir(parents=True)
-
-app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # Настройка временной директории
 TEMP_DIR = Path("/tmp/temp_audio")
-TEMP_DIR.mkdir(exist_ok=True)
+TEMP_DIR.mkdir(exist_ok=True, parents=True)
 
 # Глобальные флаги
 is_shutting_down = False
@@ -48,21 +56,27 @@ class VideoRequest(BaseModel):
 def cleanup_resources():
     """Очистка ресурсов при выключении"""
     global is_shutting_down
-    is_shutting_down = True
-    
-    logger.info("Cleaning up resources...")
     try:
-        thread_pool.shutdown(wait=True)
+        is_shutting_down = True
+        logger.info("Cleaning up resources...")
+        
+        # Корректное завершение thread pool
+        thread_pool.shutdown(wait=False)
+        
+        # Очистка временных файлов
         if TEMP_DIR.exists():
-            shutil.rmtree(TEMP_DIR)
-            TEMP_DIR.mkdir(exist_ok=True)
+            try:
+                shutil.rmtree(TEMP_DIR)
+                TEMP_DIR.mkdir(exist_ok=True)
+            except Exception as e:
+                logger.warning(f"Error cleaning temp directory: {e}")
+                
         logger.info("Cleanup completed successfully")
     except Exception as e:
         logger.error(f"Error during cleanup: {e}")
 
-# Регистрация обработчиков
-for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT):
-    signal.signal(sig, lambda signum, frame: cleanup_resources())
+# Регистрация обработчиков завершения
+signal.signal(signal.SIGTERM, lambda signum, frame: cleanup_resources())
 atexit.register(cleanup_resources)
 
 @app.on_event("startup")
@@ -70,30 +84,12 @@ async def startup_event():
     global is_shutting_down
     is_shutting_down = False
     logger.info("Application starting up...")
-    TEMP_DIR.mkdir(exist_ok=True)
+    TEMP_DIR.mkdir(exist_ok=True, parents=True)
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Application shutting down...")
-    cleanup_resources()
-
-async def cleanup_old_files():
-    """Очистка старых файлов"""
-    if is_shutting_down:
-        return
-        
-    try:
-        current_time = time.time()
-        for file_path in TEMP_DIR.glob("*.mp3"):
-            try:
-                file_age = current_time - os.path.getctime(str(file_path))
-                if file_age > 3600:  # 1 час
-                    os.unlink(str(file_path))
-                    logger.info(f"Removed old file: {file_path}")
-            except Exception as e:
-                logger.error(f"Error removing file {file_path}: {e}")
-    except Exception as e:
-        logger.error(f"Error in cleanup: {e}")
+    await asyncio.get_event_loop().run_in_executor(None, cleanup_resources)
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
@@ -108,15 +104,20 @@ async def read_root(request: Request):
 async def process_video(video_request: VideoRequest):
     """Обработка видео"""
     if is_shutting_down:
-        raise HTTPException(status_code=503, detail="Service is shutting down")
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Service is shutting down"}
+        )
 
-    processor = TikTokProcessor()
+    processor = None
     try:
-        # Проверка языка
         if video_request.target_language not in ['en', 'ru', 'lt']:
-            raise HTTPException(status_code=400, detail="Unsupported language")
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "Unsupported language"}
+            )
 
-        # Обработка видео
+        processor = TikTokProcessor()
         transcript, summary, audio_path = await processor.process_video(
             video_request.url,
             video_request.target_language
@@ -131,85 +132,103 @@ async def process_video(video_request: VideoRequest):
             shutil.copy2(audio_path, final_audio_path)
             audio_filename = filename
 
-        response_data = {
+        return JSONResponse(content={
             "transcription": transcript,
-            "summary": summary
-        }
-        
-        if audio_filename:
-            response_data["audio_path"] = audio_filename
-
-        return response_data
+            "summary": summary,
+            "audio_path": audio_filename
+        })
 
     except ValueError as e:
         if "too long" in str(e):
-            return {
+            return JSONResponse(content={
                 "transcription": str(e),
                 "summary": "Video too long for automatic processing",
-                "audio_path": processor.get_extracted_audio_path()
-            }
-        raise HTTPException(status_code=400, detail=str(e))
+                "audio_path": processor.get_extracted_audio_path() if processor else None
+            })
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(e)}
+        )
     except Exception as e:
         logger.error(f"Processing error: {e}")
-        # Пытаемся вернуть хотя бы аудио при ошибке
-        audio_path = processor.get_extracted_audio_path()
-        if audio_path and os.path.exists(audio_path):
-            timestamp = int(time.time())
-            filename = f"audio_{timestamp}.mp3"
-            final_audio_path = TEMP_DIR / filename
-            shutil.copy2(audio_path, final_audio_path)
-            return {
-                "transcription": "Processing failed",
-                "summary": "Processing failed",
-                "audio_path": filename
-            }
-        raise HTTPException(status_code=500, detail=str(e))
+        if processor:
+            # Пытаемся сохранить аудио при ошибке
+            try:
+                audio_path = processor.get_extracted_audio_path()
+                if audio_path and os.path.exists(audio_path):
+                    timestamp = int(time.time())
+                    filename = f"audio_{timestamp}.mp3"
+                    final_audio_path = TEMP_DIR / filename
+                    shutil.copy2(audio_path, final_audio_path)
+                    return JSONResponse(content={
+                        "transcription": "Processing failed",
+                        "summary": "Processing failed",
+                        "audio_path": filename
+                    })
+            except Exception as save_error:
+                logger.error(f"Error saving audio: {save_error}")
+        
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)}
+        )
     finally:
-        if not is_shutting_down:
-            await cleanup_old_files()
-        processor.cleanup()
+        if processor:
+            processor.cleanup()
 
 @app.post("/extract-audio")
 async def extract_audio_endpoint(video_request: VideoRequest):
     """Извлечение аудио из видео"""
     if is_shutting_down:
-        raise HTTPException(status_code=503, detail="Service is shutting down")
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Service is shutting down"}
+        )
         
-    processor = TikTokProcessor()
+    processor = None
     try:
-        # Загрузка и извлечение
+        processor = TikTokProcessor()
         video_path = await processor.download_video(video_request.url)
         audio_path = await processor.extract_audio(video_path)
         
-        # Сохранение файла
         timestamp = int(time.time())
         filename = f"audio_{timestamp}.mp3"
         final_audio_path = TEMP_DIR / filename
         
         shutil.copy2(audio_path, final_audio_path)
         
-        return {
+        return JSONResponse(content={
             "audio_path": filename,
             "size_mb": os.path.getsize(final_audio_path) / (1024*1024),
             "status": "success"
-        }
+        })
         
     except Exception as e:
         logger.error(f"Audio extraction error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)}
+        )
     finally:
-        processor.cleanup()
+        if processor:
+            processor.cleanup()
 
 @app.get("/download-audio/{filename}")
 async def download_audio(filename: str):
     """Скачивание аудио файла"""
     if is_shutting_down:
-        raise HTTPException(status_code=503, detail="Service is shutting down")
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Service is shutting down"}
+        )
         
     try:
         file_path = TEMP_DIR / filename
         if not file_path.exists():
-            raise HTTPException(status_code=404, detail="Audio file not found")
+            return JSONResponse(
+                status_code=404,
+                content={"detail": "Audio file not found"}
+            )
             
         return FileResponse(
             path=file_path,
@@ -220,7 +239,10 @@ async def download_audio(filename: str):
         
     except Exception as e:
         logger.error(f"Download error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)}
+        )
 
 if __name__ == "__main__":
     import uvicorn
