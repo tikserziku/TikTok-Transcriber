@@ -1,3 +1,6 @@
+from fastapi.responses import FileResponse
+import os
+from pathlib import Path
 import asyncio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -94,6 +97,59 @@ async def process_video(video_request: VideoRequest):
         raise HTTPException(status_code=500, detail="Video processing failed")
     finally:
         processor.cleanup()
+
+@app.post("/extract-audio")
+async def extract_audio_endpoint(video_request: VideoRequest):
+    processor = TikTokProcessor()
+    
+    try:
+        # Создаем временную директорию для сохранения файлов
+        temp_dir = Path("temp_audio")
+        temp_dir.mkdir(exist_ok=True)
+        
+        # Загружаем видео и извлекаем аудио
+        video_path = await asyncio.to_thread(processor.download_video, video_request.url)
+        audio_path = await asyncio.to_thread(processor.extract_audio, video_path)
+        
+        # Копируем аудио файл во временную директорию с уникальным именем
+        timestamp = int(time.time())
+        final_audio_path = temp_dir / f"audio_{timestamp}.mp3"
+        shutil.copy2(audio_path, final_audio_path)
+        
+        return {"audio_path": str(final_audio_path.name)}
+        
+    except Exception as e:
+        logger.error(f"Audio extraction error: {e}")
+        raise HTTPException(status_code=500, detail="Audio extraction failed")
+    finally:
+        processor.cleanup()
+
+@app.get("/download-audio/{filename}")
+async def download_audio(filename: str):
+    try:
+        file_path = Path("temp_audio") / filename
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="Audio file not found")
+            
+        response = FileResponse(
+            path=file_path,
+            media_type="audio/mpeg",
+            filename=filename
+        )
+        
+        # Удаляем файл после отправки
+        @response.background
+        def cleanup(file_path=file_path):
+            try:
+                os.unlink(file_path)
+            except Exception as e:
+                logger.error(f"Error deleting audio file: {e}")
+                
+        return response
+        
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        raise HTTPException(status_code=500, detail="Download failed")
 
 
 if __name__ == "__main__":
