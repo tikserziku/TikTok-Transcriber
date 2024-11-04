@@ -1,29 +1,23 @@
 import asyncio
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
-import logging
+import tempfile
 import os
-from processor import TikTokProcessor
+import logging
 from concurrent.futures import ThreadPoolExecutor
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from processor import TikTokProcessor
+from pydantic import BaseModel
+
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Инициализация ThreadPool для асинхронных операций
 thread_pool = ThreadPoolExecutor(max_workers=3)
-
 app = FastAPI()
 
-# Подключаем статические файлы и шаблоны
 app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
 
 
 class VideoRequest(BaseModel):
@@ -43,65 +37,64 @@ async def shutdown_event():
 
 
 @app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    try:
-        return templates.TemplateResponse("index.html", {"request": request})
-    except Exception as e:
-        logger.error(f"Error rendering index page: {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+async def read_root():
+    with open("static/index.html", "r", encoding="utf-8") as f:
+        html_content = f.read()
+    return HTMLResponse(content=html_content, status_code=200)
 
 
 @app.post("/process")
-async def process_video(video_request: VideoRequest):
-    processor = TikTokProcessor()
-
-    async def run_processing():
-        try:
-            result = await asyncio.to_thread(
-                processor.process_video,
-                video_request.url,
-                video_request.target_language
-            )
-            return result
-        except Exception as e:
-            logger.error(f"Processing error in thread: {e}")
-            raise
-
+async def process_video_route(request: Request):
     try:
-        # Проверка языка
+        video_request = await request.json()
+        url = video_request.get('url')
+        target_language = video_request.get('target_language')
+
         valid_languages = ['en', 'ru', 'lt']
-        if video_request.target_language not in valid_languages:
+        if target_language not in valid_languages:
             raise HTTPException(status_code=400, detail="Unsupported language")
 
-        # Обработка с таймаутом
-        try:
-            transcript, summary = await asyncio.wait_for(
-                run_processing(),
-                timeout=300
-            )
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=408, detail="Request Timeout")
+        processor = TikTokProcessor()
+        transcript, summary, audio_filepath = await asyncio.to_thread(
+            processor.process_video, url, target_language
+        )
+
+        audio_filename = os.path.basename(audio_filepath) # Get filename for download
+
 
         return {
             "transcription": transcript,
-            "summary": summary
+            "summary": summary,
+            "audio_url": f"/download/{audio_filename}"
         }
 
+
     except HTTPException:
-        raise  # Re-raise HTTPExceptions
+        raise
     except Exception as e:
         logger.error(f"Processing error: {e}")
-        raise HTTPException(status_code=500, detail="Video processing failed")
+        raise HTTPException(status_code=500, detail=f"Video processing failed: {e}")
     finally:
-        processor.cleanup()
+        processor.cleanup()  # Cleanup temporary files
+
+
+
+@app.get("/download/{filename}")
+async def download_audio(filename: str):
+    audio_filepath = os.path.join(tempfile.gettempdir(), filename)
+    if os.path.exists(audio_filepath):
+
+      def iterfile():  # Generator to stream file chunks
+            with open(audio_filepath, mode="rb") as file_like:
+                yield from file_like
+
+      return StreamingResponse(iterfile(), media_type="audio/mpeg", headers={"Content-Disposition": f"attachment; filename={filename}"})
+
+    else:
+        raise HTTPException(status_code=404, detail="Audio file not found")
 
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        log_level="info"
-    )
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
