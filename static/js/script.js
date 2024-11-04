@@ -25,15 +25,13 @@ async function processVideo() {
     updateContent('summary', 'Processing...');
 
     try {
-        let combinedPercent = 0;
-
         // --- Download simulation ---
         const downloadInterval = setInterval(() => {
-            if (combinedPercent < 50) {
-                combinedPercent += 1;
-                updateProgress(downloadProgress, combinedPercent);
+            const percent = parseInt(downloadProgress.style.width) || 0;
+            if (percent < 100) {
+                updateProgress(downloadProgress, Math.min(percent + 2, 100));
             }
-        }, 50);
+        }, 100);
 
         const response = await fetch('/process', {
             method: 'POST',
@@ -46,35 +44,61 @@ async function processVideo() {
         clearInterval(downloadInterval);
         updateProgress(downloadProgress, 100);
 
-        // --- Processing simulation ---
-        let processPercent = 0;
-        const processInterval = setInterval(() => {
-            if (processPercent < 100) {
-                processPercent += 1;
-                updateProgress(processProgress, processPercent);
-            } else {
-                clearInterval(processInterval);
-            }
-        }, 50);
-
         if (!response.ok) {
             const errorData = await response.json();
+            
+            // Check if it's a video length error
+            if (errorData.detail && errorData.detail.includes("too long")) {
+                const errorMessage = `
+                    This video is too long for automatic transcription. 
+                    You can:
+                    1. Download the audio file and use NotebookLM (https://notebooklm.google.com/)
+                    2. Try using the "Extract Audio" button below
+                    3. Split the video into smaller parts
+                `;
+                updateContent('transcription', errorMessage);
+                updateContent('summary', 'Processing not available for long videos');
+                showAudioExtractionOption();
+                return;
+            }
+            
             throw new Error(errorData.detail || 'Network response was not ok');
         }
 
         const data = await response.json();
 
+        // Show processing progress
+        const processInterval = setInterval(() => {
+            const percent = parseInt(processProgress.style.width) || 0;
+            if (percent < 100) {
+                updateProgress(processProgress, Math.min(percent + 2, 100));
+            } else {
+                clearInterval(processInterval);
+            }
+        }, 100);
+
         // Update results
-        updateContent('transcription', data.transcription);
-        updateContent('summary', data.summary);
+        updateContent('transcription', data.transcription || 'Transcription failed');
+        updateContent('summary', data.summary || 'Summary not available');
+
+        // If audio is available, show download option
+        if (data.audio_path) {
+            showAudioDownloadOption(data.audio_path);
+        }
+
+        clearInterval(processInterval);
+        updateProgress(processProgress, 100);
 
     } catch (error) {
         console.error('Error details:', error);
-        showAlert(`Error processing video: ${error.message}`, 'danger');
-        updateContent('transcription', 'Error occurred: ' + error.message);
+        const errorMessage = error.message.includes("too long") 
+            ? `This video is too long for automatic transcription.\nPlease use the "Extract Audio" button to get the audio file and process it manually.`
+            : `Error processing video: ${error.message}`;
+        
+        showAlert(errorMessage, 'danger');
+        updateContent('transcription', errorMessage);
         updateContent('summary', 'Processing failed. Please try again.');
     } finally {
-        // Hide progress after a delay
         setTimeout(() => {
             progressContainer.style.display = 'none';
             updateProgress(downloadProgress, 0);
@@ -125,9 +149,32 @@ async function extractAudio() {
         downloadBtn.innerText = 'Download Audio';
         downloadBtn.download = data.audio_path;
 
-        // Update status
+        // Clear previous content
         audioStatus.innerText = '';
+        
+        // Add file info if available
+        if (data.size_mb) {
+            const fileInfo = document.createElement('div');
+            fileInfo.className = 'text-muted mb-2';
+            fileInfo.innerText = `File size: ${data.size_mb.toFixed(2)} MB`;
+            audioStatus.appendChild(fileInfo);
+        }
+
+        // Add download button
         audioStatus.appendChild(downloadBtn);
+
+        // Add usage instructions
+        const instructions = document.createElement('div');
+        instructions.className = 'alert alert-info mt-3';
+        instructions.innerHTML = `
+            <strong>Next steps:</strong>
+            <ul class="mb-0">
+                <li>Download the audio file</li>
+                <li>Visit <a href="https://notebooklm.google.com/" target="_blank">NotebookLM</a></li>
+                <li>Upload the audio file for transcription</li>
+            </ul>
+        `;
+        audioStatus.appendChild(instructions);
 
     } catch (error) {
         console.error('Error:', error);
@@ -153,6 +200,36 @@ function updateContent(elementId, content) {
         if (contentElement) {
             contentElement.innerText = content;
         }
+    }
+}
+
+function showAudioExtractionOption() {
+    const audioSection = document.getElementById('audio-download');
+    if (audioSection) {
+        audioSection.style.display = 'block';
+        const notice = document.createElement('div');
+        notice.className = 'alert alert-info mt-3';
+        notice.innerHTML = `
+            You can use the extracted audio file with:
+            <ul>
+                <li><a href="https://notebooklm.google.com/" target="_blank">NotebookLM</a></li>
+                <li>Other transcription services</li>
+                <li>Local speech-to-text tools</li>
+            </ul>
+        `;
+        audioSection.appendChild(notice);
+    }
+}
+
+function showAudioDownloadOption(audioPath) {
+    const audioSection = document.getElementById('audio-download');
+    if (audioSection) {
+        const downloadLink = document.createElement('a');
+        downloadLink.href = `/download-audio/${audioPath}`;
+        downloadLink.className = 'btn btn-success mt-2';
+        downloadLink.innerText = 'Download Audio File';
+        downloadLink.download = audioPath;
+        audioSection.appendChild(downloadLink);
     }
 }
 
@@ -206,7 +283,7 @@ function hideAlert() {
     }
 }
 
-// Optional: Add event listeners for keyboard shortcuts
+// Event listeners
 document.addEventListener('DOMContentLoaded', () => {
     // Process video on Enter key in URL input
     document.getElementById('tiktokUrl').addEventListener('keypress', (e) => {
@@ -219,7 +296,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('tiktokUrl').addEventListener('paste', (e) => {
         e.preventDefault();
         const text = e.clipboardData.getData('text');
-        const cleanUrl = text.trim(); // You can add more URL cleaning logic here
+        const cleanUrl = text.trim();
         e.target.value = cleanUrl;
     });
 });
