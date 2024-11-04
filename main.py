@@ -12,6 +12,8 @@ import shutil
 import time
 from processor import TikTokProcessor
 from concurrent.futures import ThreadPoolExecutor
+import atexit
+import signal
 
 # Настройка логирования
 logging.basicConfig(
@@ -20,8 +22,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Инициализация ThreadPool с меньшим количеством workers для Heroku
-thread_pool = ThreadPoolExecutor(max_workers=2)
+# Инициализация ThreadPool
+thread_pool = ThreadPoolExecutor(max_workers=3)
 
 app = FastAPI()
 
@@ -33,43 +35,65 @@ templates = Jinja2Templates(directory="templates")
 TEMP_DIR = Path("/tmp/temp_audio")
 TEMP_DIR.mkdir(exist_ok=True)
 
+# Глобальный флаг для отслеживания состояния приложения
+is_shutting_down = False
+
 class VideoRequest(BaseModel):
     url: str
     target_language: str
 
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Application starting up...")
-    # Очищаем временную директорию при старте
+def cleanup_resources():
+    """Очистка ресурсов при выключении"""
+    global is_shutting_down
+    is_shutting_down = True
+    
+    logger.info("Cleaning up resources...")
     try:
+        # Завершаем thread pool
+        thread_pool.shutdown(wait=True)
+        
+        # Очищаем временные файлы
         if TEMP_DIR.exists():
             shutil.rmtree(TEMP_DIR)
-        TEMP_DIR.mkdir(exist_ok=True)
+            TEMP_DIR.mkdir(exist_ok=True)
+            
+        logger.info("Cleanup completed successfully")
     except Exception as e:
-        logger.error(f"Error cleaning temp directory on startup: {e}")
+        logger.error(f"Error during cleanup: {e}")
+
+# Регистрируем обработчики сигналов
+for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT):
+    signal.signal(sig, lambda signum, frame: cleanup_resources())
+
+# Регистрируем cleanup при выходе
+atexit.register(cleanup_resources)
+
+@app.on_event("startup")
+async def startup_event():
+    global is_shutting_down
+    is_shutting_down = False
+    logger.info("Application starting up...")
+    TEMP_DIR.mkdir(exist_ok=True)
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("Application shutting down...")
-    # Gracefully закрываем thread pool
-    thread_pool.shutdown(wait=True, cancel_futures=True)
-    # Очищаем временную директорию
-    try:
-        if TEMP_DIR.exists():
-            shutil.rmtree(TEMP_DIR)
-    except Exception as e:
-        logger.error(f"Error cleaning temp directory on shutdown: {e}")
+    cleanup_resources()
 
 async def cleanup_old_files():
     """Очистка старых файлов"""
+    if is_shutting_down:
+        return
+        
     try:
         current_time = time.time()
         for file_path in TEMP_DIR.glob("*.mp3"):
+            if is_shutting_down:
+                break
             try:
-                file_age = current_time - file_path.stat().st_mtime
-                # Удаляем файлы старше 15 минут
-                if file_age > 900:
-                    file_path.unlink()
+                file_age = current_time - os.path.getctime(str(file_path))
+                if file_age > 3600:  # Удаляем файлы старше часа
+                    os.unlink(str(file_path))
                     logger.info(f"Removed old file: {file_path}")
             except Exception as e:
                 logger.error(f"Error removing file {file_path}: {e}")
@@ -78,8 +102,9 @@ async def cleanup_old_files():
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
+    if is_shutting_down:
+        raise HTTPException(status_code=503, detail="Service is shutting down")
     try:
-        await cleanup_old_files()  # Очищаем старые файлы при каждом запросе
         return templates.TemplateResponse("index.html", {"request": request})
     except Exception as e:
         logger.error(f"Error rendering index page: {e}")
@@ -87,6 +112,9 @@ async def read_root(request: Request):
 
 @app.post("/process")
 async def process_video(video_request: VideoRequest):
+    if is_shutting_down:
+        raise HTTPException(status_code=503, detail="Service is shutting down")
+        
     processor = TikTokProcessor()
 
     async def run_processing():
@@ -97,6 +125,9 @@ async def process_video(video_request: VideoRequest):
                 video_request.target_language
             )
             
+            if is_shutting_down:
+                raise HTTPException(status_code=503, detail="Service is shutting down")
+                
             audio_filename = None
             if audio_path and os.path.exists(audio_path):
                 timestamp = int(time.time())
@@ -106,24 +137,18 @@ async def process_video(video_request: VideoRequest):
                 audio_filename = filename
                 
             return transcript, summary, audio_filename
-            
         except Exception as e:
             logger.error(f"Processing error in thread: {e}")
             raise
 
     try:
-        await cleanup_old_files()  # Очищаем старые файлы перед обработкой
-
         if video_request.target_language not in ['en', 'ru', 'lt']:
             raise HTTPException(status_code=400, detail="Unsupported language")
 
-        try:
-            transcript, summary, audio_filename = await asyncio.wait_for(
-                run_processing(),
-                timeout=25  # Уменьшаем таймаут для Heroku
-            )
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=408, detail="Request Timeout")
+        transcript, summary, audio_filename = await asyncio.wait_for(
+            run_processing(),
+            timeout=290  # Чуть меньше, чем таймаут Gunicorn
+        )
 
         response_data = {
             "transcription": transcript,
@@ -135,10 +160,13 @@ async def process_video(video_request: VideoRequest):
 
         return response_data
 
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail="Request Timeout")
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Processing error: {e}")
+        # Пытаемся сохранить аудио даже при ошибке
         audio_path = processor.get_extracted_audio_path()
         if audio_path and os.path.exists(audio_path):
             timestamp = int(time.time())
@@ -150,27 +178,28 @@ async def process_video(video_request: VideoRequest):
                 "summary": "Processing failed",
                 "audio_path": filename
             }
-        raise HTTPException(status_code=500, detail="Video processing failed")
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
+        if not is_shutting_down:
+            await cleanup_old_files()
         processor.cleanup()
 
 @app.post("/extract-audio")
 async def extract_audio_endpoint(video_request: VideoRequest):
+    if is_shutting_down:
+        raise HTTPException(status_code=503, detail="Service is shutting down")
+        
     processor = TikTokProcessor()
     
     try:
-        await cleanup_old_files()
-
-        video_path = await asyncio.wait_for(
-            asyncio.to_thread(processor.download_video, video_request.url),
-            timeout=15
-        )
+        # Загружаем видео и извлекаем аудио
+        video_path = await asyncio.to_thread(processor.download_video, video_request.url)
+        audio_path = await asyncio.to_thread(processor.extract_audio, video_path)
         
-        audio_path = await asyncio.wait_for(
-            asyncio.to_thread(processor.extract_audio, video_path),
-            timeout=10
-        )
-        
+        if is_shutting_down:
+            raise HTTPException(status_code=503, detail="Service is shutting down")
+            
+        # Сохраняем аудио файл
         timestamp = int(time.time())
         filename = f"audio_{timestamp}.mp3"
         final_audio_path = TEMP_DIR / filename
@@ -178,19 +207,20 @@ async def extract_audio_endpoint(video_request: VideoRequest):
         
         return {"audio_path": filename}
         
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=408, detail="Request Timeout")
     except Exception as e:
         logger.error(f"Audio extraction error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
+        if not is_shutting_down:
+            await cleanup_old_files()
         processor.cleanup()
 
 @app.get("/download-audio/{filename}")
 async def download_audio(filename: str):
-    try:
-        await cleanup_old_files()
+    if is_shutting_down:
+        raise HTTPException(status_code=503, detail="Service is shutting down")
         
+    try:
         file_path = TEMP_DIR / filename
         if not file_path.exists():
             raise HTTPException(status_code=404, detail="Audio file not found")
@@ -210,9 +240,8 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(
-        "main:app",
+        app,
         host="0.0.0.0",
         port=port,
-        workers=1,  # Используем только один worker для Heroku
         log_level="info"
     )
