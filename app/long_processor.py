@@ -7,7 +7,6 @@ import time
 from pydub import AudioSegment
 from datetime import datetime, timedelta
 import google.generativeai as genai
-import backoff
 from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
@@ -44,8 +43,11 @@ class RateLimiter:
         self.tokens_used += estimated_tokens
 
 class LongVideoProcessor:
-    def __init__(self, api_key: str, temp_dir: str = "/tmp/long_video"):
-        self.api_key = api_key
+    def __init__(self, temp_dir: str = "/tmp/long_video"):
+        api_key = os.getenv('GOOGLE_API_KEY')
+        if not api_key:
+            raise ValueError("Google API key not found")
+            
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel('gemini-1.5-pro')
         self.temp_dir = Path(temp_dir)
@@ -53,14 +55,17 @@ class LongVideoProcessor:
         self.rate_limiter = RateLimiter()
         self.thread_pool = ThreadPoolExecutor(max_workers=2)
         self.processing_results: Dict[str, Dict] = {}
-
+        
     def cleanup_old_files(self):
         try:
             current_time = time.time()
             for file_path in self.temp_dir.glob("*.mp3"):
-                file_age = current_time - os.path.getctime(str(file_path))
-                if file_age > 3600:  # 1 hour
-                    os.unlink(str(file_path))
+                try:
+                    file_age = current_time - os.path.getctime(str(file_path))
+                    if file_age > 3600:  # 1 hour
+                        os.unlink(str(file_path))
+                except Exception as e:
+                    logger.error(f"Error removing file {file_path}: {e}")
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
 
@@ -87,30 +92,33 @@ class LongVideoProcessor:
             logger.error(f"Error splitting audio: {e}")
             raise
 
-    async def transcribe_chunk(self, chunk_path: str) -> str:
-        """Транскрибирует один аудио чанк"""
-        try:
-            estimated_tokens = 1000
-            await self.rate_limiter.wait_for_quota(estimated_tokens)
+    async def transcribe_chunk(self, chunk_path: str, retries: int = 3) -> str:
+        """Транскрибирует один аудио чанк с повторными попытками"""
+        for attempt in range(retries):
+            try:
+                estimated_tokens = 1000
+                await self.rate_limiter.wait_for_quota(estimated_tokens)
 
-            with open(chunk_path, 'rb') as f:
-                audio_data = f.read()
+                with open(chunk_path, 'rb') as f:
+                    audio_data = f.read()
 
-            response = await asyncio.to_thread(
-                self.model.generate_content,
-                [
-                    "Transcribe this audio accurately, preserving all details and context.",
-                    {
-                        "mime_type": "audio/mp3",
-                        "data": audio_data
-                    }
-                ]
-            )
-            return response.text
+                response = await asyncio.to_thread(
+                    self.model.generate_content,
+                    [
+                        "Transcribe this audio accurately, preserving all details and context.",
+                        {
+                            "mime_type": "audio/mp3",
+                            "data": audio_data
+                        }
+                    ]
+                )
+                return response.text
 
-        except Exception as e:
-            logger.error(f"Error transcribing chunk {chunk_path}: {e}")
-            return f"[Error transcribing chunk: {str(e)}]"
+            except Exception as e:
+                logger.error(f"Error transcribing chunk {chunk_path} (attempt {attempt + 1}): {e}")
+                if attempt == retries - 1:  # Последняя попытка
+                    return f"[Error transcribing chunk after {retries} attempts: {str(e)}]"
+                await asyncio.sleep(2 ** attempt)  # Экспоненциальная задержка
 
     async def process_long_video(self, audio_path: str, request_id: str):
         """Обрабатывает длинное видео"""
@@ -166,3 +174,26 @@ class LongVideoProcessor:
             self.cleanup_old_files()
         except Exception as e:
             logger.error(f"Cleanup error: {e}")
+
+    async def generate_summary(self, transcript: str, target_language: str) -> str:
+        """Генерирует саммари для транскрипции"""
+        try:
+            await self.rate_limiter.wait_for_quota(1000)
+            
+            language_prompts = {
+                'en': 'Generate a comprehensive summary in English:',
+                'ru': 'Составьте подробное резюме на русском языке:',
+                'lt': 'Sukurkite išsamią santrauką lietuvių kalba:'
+            }
+            
+            prompt = f"{language_prompts.get(target_language, language_prompts['en'])} {transcript}"
+            
+            response = await asyncio.to_thread(
+                self.model.generate_content,
+                prompt
+            )
+            return response.text
+            
+        except Exception as e:
+            logger.error(f"Error generating summary: {e}")
+            return f"[Error generating summary: {str(e)}]"
